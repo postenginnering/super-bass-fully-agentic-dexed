@@ -27,7 +27,7 @@ jobs:
       - name: Build
         run: >-
           cmake --build build --config Release --parallel
-          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone
+          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_Standalone
 
       - name: Test
         run: >-
@@ -87,7 +87,7 @@ jobs:
       - name: Build
         run: >-
           cmake --build build --config Release --parallel
-          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_Standalone
+          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone
 
       - name: Test
         run: >-
