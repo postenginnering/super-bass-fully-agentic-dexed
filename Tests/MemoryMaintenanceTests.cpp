@@ -216,7 +216,13 @@ public:
         auto cancelStore = std::make_shared<ConversationContextStore>(cancelRoot.file);
         auto cancelManager = std::make_shared<ContextManager>(cancelStore);
         agentic_dexed::security::MemoryCredentialStore cancelCredentials;
+        expect(cancelCredentials.store(
+            "provider.maintenance", "maintenance-test-secret").ok());
         MaintenanceModel cancelModel;
+        cancelModel.responses = {
+            R"({"operation":"add","key":"pad_brightness","preference":"明亮的 pad","evidence":"我一般偏好很亮的 pad"})",
+            R"({"operation":"none","key":"","preference":"","evidence":""})"
+        };
         MemoryMaintenanceService cancelService(
             cancelModel, cancelCredentials, cancelStore, cancelManager);
         const auto cancelPreset = juce::Uuid().toString().toStdString();
@@ -226,6 +232,11 @@ public:
         expect(cancelService.waitUntilIdle(std::chrono::seconds(2)));
         expectEquals(static_cast<int>(cancelModel.providers.size()), 0);
         expectEquals(static_cast<int>(cancelStore->load(cancelPreset).context.recentTurns.size()), 1);
+        cancelService.onTurnFinished(terminal(
+            cancelPreset, "after-cancel", u8"继续这个 pad", 1));
+        expect(cancelService.waitUntilIdle(std::chrono::seconds(2)));
+        expectEquals(static_cast<int>(cancelModel.providers.size()), 2);
+        expect(cancelStore->loadPreferences().text.contains(u8"明亮的 pad"));
         cancelService.shutdown();
 
         beginTest("Shutdown cancels an active maintenance request and drains queued work");

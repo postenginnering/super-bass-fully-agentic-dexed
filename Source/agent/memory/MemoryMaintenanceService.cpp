@@ -42,8 +42,23 @@ void MemoryMaintenanceService::onTurnFinished(context::TerminalTurn turn)
 {
     if (contextManager_ != nullptr)
         contextManager_->onTurnFinished(turn);
-    if (turn.turn.terminalState != context::TurnTerminalState::cancelled)
-        enqueue(std::move(turn));
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_)
+            return;
+        if (turn.turn.terminalState == context::TurnTerminalState::cancelled) {
+            if (deferredCancelled_.size() >= 8)
+                deferredCancelled_.pop_front();
+            deferredCancelled_.push_back(std::move(turn));
+            return;
+        }
+        while (!deferredCancelled_.empty()) {
+            queue_.push_back(std::move(deferredCancelled_.front()));
+            deferredCancelled_.pop_front();
+        }
+        queue_.push_back(std::move(turn));
+    }
+    workCondition_.notify_one();
 }
 
 void MemoryMaintenanceService::enqueue(context::TerminalTurn turn)
@@ -69,6 +84,7 @@ void MemoryMaintenanceService::shutdown() noexcept
             return;
         stopping_ = true;
         queue_.clear();
+        deferredCancelled_.clear();
         cancellation = activeCancellation_;
         handle = std::move(activeHandle_);
     }

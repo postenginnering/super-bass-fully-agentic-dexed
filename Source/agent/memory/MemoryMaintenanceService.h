@@ -56,6 +56,7 @@ private:
     std::condition_variable workCondition_;
     std::condition_variable idleCondition_;
     std::deque<context::TerminalTurn> queue_;
+    std::deque<context::TerminalTurn> deferredCancelled_;
     std::shared_ptr<CancellationSource> activeCancellation_;
     std::unique_ptr<http::IRequestHandle> activeHandle_;
     DiagnosticCallback diagnosticCallback_;
