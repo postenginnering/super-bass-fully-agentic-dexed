@@ -2,6 +2,7 @@
 
 #include "AgentLimits.h"
 #include "context/ContextManager.h"
+#include "context/PortablePresetContext.h"
 #include "model/ChatCompletionsClient.h"
 #include "model/ResponsesClient.h"
 #include "http/JuceHttpTransport.h"
@@ -191,6 +192,11 @@ public:
           session_(router_, dispatcher_, credentials_, {}, contextManager_, contextManager_),
           connectionWorker_([this] { connectionWorkerLoop(); })
     {
+        currentPresetId_ = juce::Uuid().toString().toStdString();
+        context::PresetConversationContext empty;
+        empty.presetId = currentPresetId_;
+        const auto encoded = context::encodePortableContext(empty);
+        contextManager_->installPortableContext(std::move(empty), encoded);
     }
 
     ~Impl() override
@@ -268,6 +274,52 @@ public:
     {
         std::lock_guard<std::mutex> lock(editorMutex_);
         return editorAttached_;
+    }
+
+    void prepareRequest(session::UserAgentRequest& request)
+    {
+        std::lock_guard<std::mutex> lock(presetMutex_);
+        if (request.presetId.empty())
+            request.presetId = currentPresetId_;
+        else
+            currentPresetId_ = request.presetId;
+    }
+
+    juce::MemoryBlock portableContextSnapshot() const
+    {
+        std::string presetId;
+        {
+            std::lock_guard<std::mutex> lock(presetMutex_);
+            presetId = currentPresetId_;
+        }
+        return contextManager_->portableSnapshot(presetId);
+    }
+
+    bool importPortableContext(const juce::MemoryBlock& encoded)
+    {
+        auto decoded = context::decodePortableContext(encoded);
+        if (!decoded.ok || !decoded.context.has_value())
+            return false;
+        auto context = std::move(*decoded.context);
+        const auto presetId = context.presetId;
+        if (!contextManager_->installPortableContext(context, encoded))
+            return false;
+        {
+            std::lock_guard<std::mutex> lock(presetMutex_);
+            currentPresetId_ = presetId;
+        }
+        session_.loadConversation(contextManager_->cachedConversation(presetId));
+        enqueueConnection([manager = contextManager_, context = std::move(context)]() mutable {
+            manager->persistConversation(std::move(context));
+        });
+        return true;
+    }
+
+    void resetPortableContext()
+    {
+        context::PresetConversationContext empty;
+        empty.presetId = juce::Uuid().toString().toStdString();
+        importPortableContext(context::encodePortableContext(empty));
     }
 
     std::unique_ptr<http::IRequestHandle> testConnection(
@@ -385,6 +437,9 @@ public:
     std::shared_ptr<context::ContextManager> contextManager_;
     session::AgentSession session_;
 
+    mutable std::mutex presetMutex_;
+    std::string currentPresetId_;
+
     mutable std::mutex editorMutex_;
     SaveRequestCallback saveRequest_;
     bool editorAttached_ = false;
@@ -426,6 +481,7 @@ security::CredentialSession& AgentController::credentials() noexcept { return im
 
 void AgentController::start(session::UserAgentRequest request)
 {
+    impl_->prepareRequest(request);
     {
         std::lock_guard<std::mutex> lock(impl_->checkpointMutex_);
         impl_->requestCheckpoints_.push_back(impl_->stateService_.snapshot({}));
@@ -433,6 +489,21 @@ void AgentController::start(session::UserAgentRequest request)
             impl_->requestCheckpoints_.pop_front();
     }
     impl_->session_.start(std::move(request));
+}
+
+juce::MemoryBlock AgentController::portableContextSnapshot() const
+{
+    return impl_->portableContextSnapshot();
+}
+
+bool AgentController::importPortableContext(const juce::MemoryBlock& encoded)
+{
+    return impl_->importPortableContext(encoded);
+}
+
+void AgentController::resetPortableContext()
+{
+    impl_->resetPortableContext();
 }
 
 void AgentController::cancel() noexcept { impl_->session_.cancel(); }

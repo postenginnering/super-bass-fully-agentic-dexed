@@ -171,6 +171,8 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/context/ConversationContextStore.h
 	agent/context/ContextManager.cpp
 	agent/context/ContextManager.h
+	agent/context/PortablePresetContext.cpp
+	agent/context/PortablePresetContext.h
 	agent/session/AgentPrompt.h
 	agent/session/AgentSession.cpp
 	agent/session/AgentSession.h
@@ -204,6 +206,10 @@ target_sources(${BaseTargetName} PRIVATE
     # until MTS-ESP has is own cmake project
     ../libs/MTS-ESP/Client/libMTSClient.cpp
 )
+# CMake 4.2's Visual Studio generator can otherwise leave this relative source
+# list unevaluated after regeneration, producing a JUCE-only shared-code archive.
+get_target_property(_agentic_materialized_sources ${BaseTargetName} SOURCES)
+unset(_agentic_materialized_sources)
 
 if(WIN32)
     target_sources(${BaseTargetName} PRIVATE security/CredentialStore_windows.cpp)

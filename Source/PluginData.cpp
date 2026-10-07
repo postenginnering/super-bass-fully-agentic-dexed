@@ -22,6 +22,8 @@
 
 #include "PluginParam.h"
 #include "PluginProcessor.h"
+#include "agent/AgentController.h"
+#include "agent/context/PortablePresetContext.h"
 #include "ui/UiOperationResult.h"
 #include "PluginData.h"
 #include "state/SynthStateService.h"
@@ -366,7 +368,7 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
         std::this_thread::yield();
     }
 
-    dexedState.setAttribute("agenticStateVersion", 1);
+    dexedState.setAttribute("agenticStateVersion", 2);
     dexedState.setAttribute("cutoff", realtime.filterCutoff);
     dexedState.setAttribute("reso", realtime.filterResonance);
     dexedState.setAttribute("gain", realtime.outputGain);
@@ -423,9 +425,6 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
         kbmx->addTextElement(savedKbmData);
     }
     
-    if ( activeFileCartridge.exists() )
-        dexedState.setAttribute("activeFileCartridge", activeFileCartridge.getFullPathName());
-
     NamedValueSet blobSet;
     blobSet.set("sysex", var((void *) currentCart.getVoiceSysex(), 4104));
     std::array<uint8_t, agentic_dexed::RealtimeSynthState::voiceByteCount> program;
@@ -442,6 +441,20 @@ void DexedAudioProcessor::getStateInformation(MemoryBlock& destData) {
         ccMapping->setAttribute("cc", i.getKey());
         Ctrl *ctrl = i.getValue();
         ccMapping->setAttribute("target", ctrl->label);
+    }
+
+    if (agenticAgentController_ != nullptr)
+    {
+        const auto portable = agenticAgentController_->portableContextSnapshot();
+        if (!portable.isEmpty())
+        {
+            auto* contextNode = dexedState.createNewChildElement("agentContext");
+            contextNode->setAttribute("version", agentic_dexed::agent::context::kPortableContextEnvelopeVersion);
+            contextNode->setAttribute("encoding", "base64");
+            contextNode->setAttribute("sha256",
+                agentic_dexed::agent::context::portableContextSha256(portable));
+            contextNode->addTextElement(portable.toBase64Encoding());
+        }
     }
     
     copyXmlToBinary(dexedState, destData);
@@ -462,6 +475,23 @@ void DexedAudioProcessor::setStateInformation(const void* source, int sizeInByte
     if (!root->hasTagName("dexedState")) {
         TRACE("unknown state root");
         return;
+    }
+
+    juce::MemoryBlock portableContext;
+    bool contextNodePresent = false;
+    bool portableContextValid = false;
+    if (auto* contextNode = root->getChildByName("agentContext"))
+    {
+        contextNodePresent = true;
+        if (contextNode->getIntAttribute("version")
+                == agentic_dexed::agent::context::kPortableContextEnvelopeVersion
+            && contextNode->getStringAttribute("encoding") == "base64"
+            && contextNode->getAllSubText().length() <= 3 * 1024 * 1024
+            && portableContext.fromBase64Encoding(contextNode->getAllSubText())
+            && contextNode->getStringAttribute("sha256").toStdString()
+                == agentic_dexed::agent::context::portableContextSha256(portableContext)
+            && agentic_dexed::agent::context::decodePortableContext(portableContext).ok)
+            portableContextValid = true;
     }
 
     XmlElement *dexedBlob = root->getChildByName("dexedBlob");
@@ -650,6 +680,17 @@ void DexedAudioProcessor::setStateInformation(const void* source, int sizeInByte
     panic();
     stateLock.unlock();
     updateUI();
+    if (agenticAgentController_ != nullptr)
+    {
+        bool imported = true;
+        if (portableContextValid)
+            imported = agenticAgentController_->importPortableContext(portableContext);
+        else
+            agenticAgentController_->resetPortableContext();
+        lastAgentContextImportOk_.store(
+            !contextNodePresent || (portableContextValid && imported),
+            std::memory_order_release);
+    }
 }
 
 File DexedAudioProcessor::dexedAppDir;

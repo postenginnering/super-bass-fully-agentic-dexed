@@ -223,7 +223,12 @@ void MainEditor::handleFilesDropped(const juce::StringArray& files)
             processor_.agentController().cancel();
             processor_.setStateInformation(data.getData(), static_cast<int>(data.getSize()));
             refreshState();
-            statusBar_.setMessage(juce::String::fromUTF8(u8"预设已载入。"), WorkbenchState::success);
+            if (processor_.lastAgentContextImportSucceeded())
+                statusBar_.setMessage(juce::String::fromUTF8(u8"预设已载入。"), WorkbenchState::success);
+            else
+                statusBar_.setMessage(
+                    juce::String::fromUTF8(u8"音色已载入，但对话上下文损坏，已使用新的空白上下文。"),
+                    WorkbenchState::warning);
         }
         else if (path.endsWithIgnoreCase(".syx"))
         {

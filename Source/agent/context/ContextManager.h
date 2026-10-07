@@ -1,10 +1,14 @@
 #pragma once
 
 #include "ConversationContextStore.h"
+#include "PortablePresetContext.h"
 #include "../model/ModelTypes.h"
 
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace agentic_dexed::agent::context {
@@ -51,12 +55,24 @@ public:
         std::string currentRequest,
         std::string primarySystemPrompt = {}) const;
     PresetContextView loadConversation(const PresetId& presetId) const;
+    PresetContextView cachedConversation(const PresetId& presetId) const;
+    juce::MemoryBlock portableSnapshot(const PresetId& presetId) const;
+    bool installPortableContext(PresetConversationContext context,
+                                juce::MemoryBlock encoded);
+    bool persistConversation(PresetConversationContext context);
     void onTurnFinished(TerminalTurn turn) override;
 
     static std::size_t modelMessageBytes(const model::ModelMessage& message);
 
 private:
+    void cache(PresetConversationContext context,
+               std::optional<juce::MemoryBlock> encoded = std::nullopt) const;
+
     std::shared_ptr<ConversationContextStore> store_;
+    mutable std::mutex cacheMutex_;
+    mutable std::unordered_map<PresetId,
+        std::pair<std::shared_ptr<const PresetConversationContext>,
+                  std::shared_ptr<const juce::MemoryBlock>>> cache_;
 };
 
 } // namespace agentic_dexed::agent::context

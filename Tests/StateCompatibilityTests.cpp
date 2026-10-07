@@ -61,7 +61,8 @@ public:
         expect(xml != nullptr);
         if (xml == nullptr)
             return;
-        expectEquals(xml->getIntAttribute("agenticStateVersion", 0), 1);
+        expectEquals(xml->getIntAttribute("agenticStateVersion", 0), 2);
+        expect(xml->getChildByName("agentContext") != nullptr);
         expect(!xml->hasAttribute("transactionHistory"));
         expect(!xml->hasAttribute("credentials"));
         expect(!xml->hasAttribute("conversation"));

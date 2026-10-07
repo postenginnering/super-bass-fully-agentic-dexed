@@ -42,6 +42,7 @@
 #include "ui/UiOperationResult.h"
 
 #include <limits>
+#include <atomic>
 #include <map>
 #include <vector>
 
@@ -232,6 +233,10 @@ public :
     agentic_dexed::agent::AgentController& agentController() noexcept;
     const agentic_dexed::agent::AgentController& agentController() const noexcept;
     bool hasAgentController() const noexcept { return agenticAgentController_ != nullptr; }
+    bool lastAgentContextImportSucceeded() const noexcept
+    {
+        return lastAgentContextImportOk_.load(std::memory_order_acquire);
+    }
     
     HashMap<int, Ctrl*> mappedMidiCC;
     std::map<int, std::string> agenticMidiCCMappings;
@@ -364,6 +369,7 @@ public :
         return zoomFactor;
     }    
 private:
+    std::atomic_bool lastAgentContextImportOk_ { true };
     int chooseNote(uint8_t pitch);
     int32_t nextKeydownSeq;;
     //==============================================================================

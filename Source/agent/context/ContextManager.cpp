@@ -95,6 +95,20 @@ ContextManager::ContextManager(std::shared_ptr<ConversationContextStore> store)
 {
 }
 
+void ContextManager::cache(PresetConversationContext context,
+                           std::optional<juce::MemoryBlock> encoded) const
+{
+    auto portable = encoded.has_value() ? std::move(*encoded)
+                                        : encodePortableContext(context);
+    if (portable.isEmpty())
+        return;
+    auto snapshot = std::make_shared<const PresetConversationContext>(std::move(context));
+    auto bytes = std::make_shared<const juce::MemoryBlock>(std::move(portable));
+    const auto presetId = snapshot->presetId;
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    cache_[presetId] = { std::move(snapshot), std::move(bytes) };
+}
+
 std::size_t ContextManager::modelMessageBytes(const model::ModelMessage& message)
 {
     std::size_t result = message.role.size() + message.text.size() + 32;
@@ -135,6 +149,7 @@ ContextBuildResult ContextManager::buildRequestContext(
     }
 
     const auto snapshot = std::make_shared<PresetConversationContext>(loaded.context);
+    cache(*snapshot);
     result.context = PresetContextView(snapshot);
     result.history = naturalHistory(*snapshot);
 
@@ -202,14 +217,64 @@ PresetContextView ContextManager::loadConversation(const PresetId& presetId) con
     const auto loaded = store_->load(presetId);
     if (!loaded.ok)
         return {};
-    return PresetContextView(std::make_shared<PresetConversationContext>(loaded.context));
+    cache(loaded.context);
+    return cachedConversation(presetId);
+}
+
+PresetContextView ContextManager::cachedConversation(const PresetId& presetId) const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    const auto found = cache_.find(presetId);
+    return found == cache_.end() ? PresetContextView {}
+                                : PresetContextView(found->second.first);
+}
+
+juce::MemoryBlock ContextManager::portableSnapshot(const PresetId& presetId) const
+{
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    const auto found = cache_.find(presetId);
+    return found == cache_.end() || found->second.second == nullptr
+        ? juce::MemoryBlock {} : *found->second.second;
+}
+
+bool ContextManager::installPortableContext(PresetConversationContext context,
+                                            juce::MemoryBlock encoded)
+{
+    const auto checked = decodePortableContext(encoded);
+    if (!checked.ok || !checked.context.has_value()
+        || checked.context->presetId != context.presetId)
+        return false;
+    cache(std::move(context), std::move(encoded));
+    return true;
+}
+
+bool ContextManager::persistConversation(PresetConversationContext context)
+{
+    if (store_ == nullptr)
+        return false;
+    const auto current = store_->load(context.presetId);
+    if (!current.ok)
+        return false;
+    const auto committed = store_->commit(
+        context, current.exists ? current.context.revision : 0);
+    if (committed.status != ContextCommitStatus::committed)
+        return false;
+    context.revision = committed.currentVersion;
+    cache(std::move(context));
+    return true;
 }
 
 void ContextManager::onTurnFinished(TerminalTurn terminal)
 {
     if (store_ == nullptr || terminal.presetId.empty())
         return;
-    store_->appendTurn(terminal.presetId, std::move(terminal.turn), terminal.expectedVersion);
+    const auto committed = store_->appendTurn(
+        terminal.presetId, std::move(terminal.turn), terminal.expectedVersion);
+    if (committed.status == ContextCommitStatus::committed) {
+        const auto loaded = store_->load(terminal.presetId);
+        if (loaded.ok)
+            cache(loaded.context);
+    }
 }
 
 } // namespace agentic_dexed::agent::context

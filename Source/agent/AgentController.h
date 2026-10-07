@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <juce_core/juce_core.h>
 
 namespace agentic_dexed
 {
@@ -69,6 +70,9 @@ public:
     [[nodiscard]] security::CredentialSession& credentials() noexcept;
 
     void start(session::UserAgentRequest request);
+    [[nodiscard]] juce::MemoryBlock portableContextSnapshot() const;
+    bool importPortableContext(const juce::MemoryBlock& encoded);
+    void resetPortableContext();
     void cancel() noexcept;
     // Restore a whole user turn, including all intermediate tool commits.
     [[nodiscard]] bool canRollbackRequest() const;
