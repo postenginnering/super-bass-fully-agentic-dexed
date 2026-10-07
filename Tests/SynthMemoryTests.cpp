@@ -4,6 +4,8 @@
 
 namespace {
 using agentic_dexed::agent::memory::SynthMemory;
+using agentic_dexed::agent::memory::PreferenceOperation;
+using agentic_dexed::agent::memory::ValidatedPreferenceDiff;
 class SynthMemoryTests final : public juce::UnitTest {
 public:
     SynthMemoryTests() : UnitTest("Local synth memory", "Agent") {}
@@ -41,6 +43,25 @@ public:
         expect(memory.read().text.contains("soft bass"));
         expect(memory.read().text.contains("bright lead"));
         expect(memory.read().text.contains("My manual notes."));
+        beginTest("Validated automatic observations promote only across distinct turns");
+        const ValidatedPreferenceDiff firstObservation {
+            PreferenceOperation::observe, "space", juce::String::fromUTF8("喜欢宽阔的空间感").toStdString(),
+            juce::String::fromUTF8("宽阔的空间感").toStdString(), "turn-one", false
+        };
+        expect(memory.applyPreferenceDiff(firstObservation).ok);
+        expect(!memory.read().text.contains(juce::String::fromUTF8("宽阔的空间感")));
+        expect(memory.applyPreferenceDiff(firstObservation).ok);
+        expect(!memory.read().text.contains(juce::String::fromUTF8("宽阔的空间感")));
+        auto secondObservation = firstObservation;
+        secondObservation.turnId = "turn-two";
+        expect(memory.applyPreferenceDiff(secondObservation).ok);
+        expect(memory.read().text.contains(juce::String::fromUTF8("宽阔的空间感")));
+        expect(file.getSiblingFile("memory-state.json").existsAsFile());
+        beginTest("Automatic preference diffs reject credentials and private paths");
+        const auto preferencesBeforeSensitive = file.loadFileAsString();
+        expect(!memory.applyPreferenceDiff({ PreferenceOperation::add, "secret", "sk-DO-NOT-LEAK-12345678", "exact", "turn-3", true }).ok);
+        expect(!memory.applyPreferenceDiff({ PreferenceOperation::add, "path", "C:\\Users\\alice\\private", "exact", "turn-4", true }).ok);
+        expectEquals(file.loadFileAsString(), preferencesBeforeSensitive);
         beginTest("Forget and clear persist; no patch state is involved");
         expect(memory.update("forget", "pad", "", "forget pad", "forget pad", "").ok);
         expect(!memory.read().text.contains("[pad]"));

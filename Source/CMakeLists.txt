@@ -167,6 +167,8 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/context/ConversationSerialization.h
 	agent/context/PresetIdentityService.cpp
 	agent/context/PresetIdentityService.h
+	agent/context/ConversationContextStore.cpp
+	agent/context/ConversationContextStore.h
 	agent/session/AgentPrompt.h
 	agent/session/AgentSession.cpp
 	agent/session/AgentSession.h
