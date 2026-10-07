@@ -160,6 +160,9 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/session/AgentPrompt.cpp
 	agent/memory/SynthMemory.cpp
 	agent/memory/SynthMemory.h
+	agent/context/ConversationTypes.h
+	agent/context/ConversationSerialization.cpp
+	agent/context/ConversationSerialization.h
 	agent/session/AgentPrompt.h
 	agent/session/AgentSession.cpp
 	agent/session/AgentSession.h
