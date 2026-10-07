@@ -322,6 +322,93 @@ public:
         importPortableContext(context::encodePortableContext(empty));
     }
 
+    bool activatePreset(context::PresetActivation activation)
+    {
+        if (juce::Uuid(juce::String(activation.presetId)).isNull())
+            return false;
+
+        session_.cancel();
+        auto view = contextManager_->cachedConversation(activation.presetId);
+        if (view.empty())
+            view = contextManager_->loadConversation(activation.presetId);
+        if (view.empty())
+            return false;
+
+        if (!activation.fingerprint.empty()
+            && std::find(view->fingerprintAliases.begin(),
+                         view->fingerprintAliases.end(), activation.fingerprint)
+                == view->fingerprintAliases.end())
+        {
+            auto updated = *view.snapshot();
+            updated.fingerprintAliases.push_back(std::move(activation.fingerprint));
+            const auto encoded = context::encodePortableContext(updated);
+            if (!contextManager_->installPortableContext(updated, encoded))
+                return false;
+            enqueueConnection([manager = contextManager_, updated = std::move(updated)]() mutable {
+                manager->persistConversation(std::move(updated));
+            });
+            view = contextManager_->cachedConversation(activation.presetId);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(presetMutex_);
+            currentPresetId_ = activation.presetId;
+        }
+        session_.loadConversation(view);
+        return true;
+    }
+
+    bool clonePresetContext(const context::PresetId& source,
+                            const context::PresetId& destination)
+    {
+        if (source.empty() || destination.empty() || source == destination
+            || juce::Uuid(juce::String(destination)).isNull())
+            return false;
+        auto sourceView = contextManager_->cachedConversation(source);
+        if (sourceView.empty())
+            sourceView = contextManager_->loadConversation(source);
+        if (sourceView.empty())
+            return false;
+        auto cloned = *sourceView.snapshot();
+        cloned.presetId = destination;
+        cloned.revision = 0;
+        cloned.updatedAtUnixMs = 0;
+        cloned.fingerprintAliases.clear();
+        const auto encoded = context::encodePortableContext(cloned);
+        if (!contextManager_->installPortableContext(cloned, encoded))
+            return false;
+        enqueueConnection([manager = contextManager_, cloned = std::move(cloned)]() mutable {
+            manager->persistConversation(std::move(cloned));
+        });
+        return true;
+    }
+
+    bool movePresetContext(const context::PresetId& source,
+                           const context::PresetId& destination)
+    {
+        if (source == destination)
+            return true;
+        if (!clonePresetContext(source, destination))
+            return false;
+        bool wasCurrent = false;
+        {
+            std::lock_guard<std::mutex> lock(presetMutex_);
+            wasCurrent = currentPresetId_ == source;
+        }
+        return !wasCurrent || activatePreset({ destination, {}, false });
+    }
+
+    context::PresetContextView currentConversation() const
+    {
+        std::string presetId;
+        {
+            std::lock_guard<std::mutex> lock(presetMutex_);
+            presetId = currentPresetId_;
+        }
+        auto view = contextManager_->cachedConversation(presetId);
+        return view.empty() ? contextManager_->loadConversation(presetId) : view;
+    }
+
     std::unique_ptr<http::IRequestHandle> testConnection(
         const model::ProviderConfig& provider,
         ConnectionTestCallback callback)
@@ -504,6 +591,28 @@ bool AgentController::importPortableContext(const juce::MemoryBlock& encoded)
 void AgentController::resetPortableContext()
 {
     impl_->resetPortableContext();
+}
+
+bool AgentController::activatePreset(context::PresetActivation activation)
+{
+    return impl_->activatePreset(std::move(activation));
+}
+
+bool AgentController::clonePresetContext(
+    const context::PresetId& source, const context::PresetId& destination)
+{
+    return impl_->clonePresetContext(source, destination);
+}
+
+bool AgentController::movePresetContext(
+    const context::PresetId& source, const context::PresetId& destination)
+{
+    return impl_->movePresetContext(source, destination);
+}
+
+context::PresetContextView AgentController::currentConversation() const
+{
+    return impl_->currentConversation();
 }
 
 void AgentController::cancel() noexcept { impl_->session_.cancel(); }

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "context/ConversationTypes.h"
+#include "context/PresetIdentityService.h"
+
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -73,6 +76,12 @@ public:
     [[nodiscard]] juce::MemoryBlock portableContextSnapshot() const;
     bool importPortableContext(const juce::MemoryBlock& encoded);
     void resetPortableContext();
+    bool activatePreset(context::PresetActivation activation);
+    bool clonePresetContext(const context::PresetId& source,
+                            const context::PresetId& destination);
+    bool movePresetContext(const context::PresetId& source,
+                           const context::PresetId& destination);
+    [[nodiscard]] context::PresetContextView currentConversation() const;
     void cancel() noexcept;
     // Restore a whole user turn, including all intermediate tool commits.
     [[nodiscard]] bool canRollbackRequest() const;

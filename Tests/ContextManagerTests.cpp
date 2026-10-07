@@ -150,6 +150,43 @@ public:
         expectEquals(static_cast<int>(reloaded.history.size()), 2);
         expectEquals(reloaded.history[0].text, std::string(u8"空灵一点"));
         expectEquals(reloaded.history[1].text, std::string(u8"已经调得更空灵"));
+
+        beginTest("A stale background persist cannot replace a newer active preset cache");
+        const auto racedPreset = newPreset();
+        PresetConversationContext staleContext;
+        staleContext.presetId = racedPreset;
+        staleContext.summary = "stale summary";
+        staleContext.recentTurns.push_back(turn("stale", "old request", "old answer"));
+        expect(manager.installPortableContext(staleContext, encodePortableContext(staleContext)));
+        auto activeContext = staleContext;
+        activeContext.summary = "active summary";
+        activeContext.recentTurns.clear();
+        activeContext.recentTurns.push_back(turn("active", "new request", "new answer"));
+        expect(manager.installPortableContext(activeContext, encodePortableContext(activeContext)));
+        expect(manager.persistConversation(std::move(staleContext)));
+        const auto afterRace = manager.buildRequestContext(
+            racedPreset, "current request", "PRIMARY SYSTEM");
+        expect(afterRace.ok);
+        const auto afterRaceText = joined(afterRace.messages);
+        expect(afterRaceText.find("new request") != std::string::npos);
+        expect(afterRaceText.find("old request") == std::string::npos);
+
+        beginTest("Terminal turn retries once after a preset context revision conflict");
+        const auto conflictPreset = newPreset();
+        expect(store->appendTurn(conflictPreset,
+            turn("existing", "first request", "first answer"), 0).status
+            == ContextCommitStatus::committed);
+        TerminalTurn conflicted;
+        conflicted.presetId = conflictPreset;
+        conflicted.expectedVersion = 0;
+        conflicted.turn = turn("retried", "second request", "second answer");
+        manager.onTurnFinished(std::move(conflicted));
+        const auto afterConflict = manager.buildRequestContext(
+            conflictPreset, "third request", "PRIMARY SYSTEM");
+        expect(afterConflict.ok);
+        const auto conflictText = joined(afterConflict.messages);
+        expect(conflictText.find("first request") != std::string::npos);
+        expect(conflictText.find("second request") != std::string::npos);
     }
 };
 

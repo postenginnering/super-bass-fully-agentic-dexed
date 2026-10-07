@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../PluginData.h"
+#include "../../agent/context/PresetIdentityService.h"
 #include "../UiOperationResult.h"
 
 #include <juce_core/juce_core.h>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class DexedAudioProcessor;
@@ -37,7 +39,9 @@ class PresetLibraryService final
 public:
     using Completion = std::function<void(UiOperationResult)>;
 
-    explicit PresetLibraryService(DexedAudioProcessor&);
+    explicit PresetLibraryService(
+        DexedAudioProcessor&,
+        std::shared_ptr<agent::context::PresetIdentityService> identities = {});
     ~PresetLibraryService();
 
     std::vector<PresetSlot> activeSlots() const;
@@ -59,6 +63,7 @@ public:
     UiOperationResult storeCurrentProgram(int destination,
                                           const Dx7NamePreview&);
     UiOperationResult initializeCurrentProgram();
+    void adoptCurrentAgentContext();
     UiOperationResult createActiveCartridge();
     UiOperationResult saveActiveCartridge(const juce::File&, bool overwrite);
     void saveActiveCartridgeAsync(juce::File, bool overwrite, Completion);
@@ -70,8 +75,14 @@ private:
                                      bool overwrite = false);
     UiOperationResult commitBrowserCartridge(const juce::File&, const Cartridge&);
     void remember(const juce::File&);
+    std::optional<agent::context::PresetActivation> activationForActiveSlot(int);
+    std::optional<agent::context::PresetActivation> freshActivation();
+    bool activateAgentContext(const agent::context::PresetActivation&);
+    void captureCurrentFingerprint();
+    void cancelAgentRequest();
 
     DexedAudioProcessor& processor_;
+    std::shared_ptr<agent::context::PresetIdentityService> identities_;
     Cartridge browserCart_;
     bool hasBrowserCart_ {};
     int browserSelection_ { -1 };

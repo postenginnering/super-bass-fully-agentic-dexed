@@ -135,11 +135,20 @@ ContextBuildResult ContextManager::buildRequestContext(
         result.error = "context store is unavailable";
         return result;
     }
-    const auto loaded = store_->load(presetId);
-    if (!loaded.ok) {
-        result.ok = false;
-        result.error = loaded.error;
-        return result;
+    std::shared_ptr<PresetConversationContext> snapshot;
+    const auto cached = cachedConversation(presetId);
+    if (!cached.empty())
+        snapshot = std::make_shared<PresetConversationContext>(*cached.snapshot());
+    else
+    {
+        const auto loaded = store_->load(presetId);
+        if (!loaded.ok) {
+            result.ok = false;
+            result.error = loaded.error;
+            return result;
+        }
+        snapshot = std::make_shared<PresetConversationContext>(loaded.context);
+        cache(*snapshot);
     }
     const auto preferences = store_->loadPreferences();
     if (!preferences.ok) {
@@ -148,8 +157,6 @@ ContextBuildResult ContextManager::buildRequestContext(
         return result;
     }
 
-    const auto snapshot = std::make_shared<PresetConversationContext>(loaded.context);
-    cache(*snapshot);
     result.context = PresetContextView(snapshot);
     result.history = naturalHistory(*snapshot);
 
@@ -252,6 +259,15 @@ bool ContextManager::persistConversation(PresetConversationContext context)
 {
     if (store_ == nullptr)
         return false;
+    std::shared_ptr<const PresetConversationContext> expectedCache;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex_);
+        const auto found = cache_.find(context.presetId);
+        if (found != cache_.end()
+            && juce::JSON::toString(serializeContext(*found->second.first), false)
+                == juce::JSON::toString(serializeContext(context), false))
+            expectedCache = found->second.first;
+    }
     const auto current = store_->load(context.presetId);
     if (!current.ok)
         return false;
@@ -260,7 +276,18 @@ bool ContextManager::persistConversation(PresetConversationContext context)
     if (committed.status != ContextCommitStatus::committed)
         return false;
     context.revision = committed.currentVersion;
-    cache(std::move(context));
+    if (expectedCache != nullptr)
+    {
+        auto portable = encodePortableContext(context);
+        if (portable.isEmpty())
+            return false;
+        auto snapshot = std::make_shared<const PresetConversationContext>(std::move(context));
+        auto bytes = std::make_shared<const juce::MemoryBlock>(std::move(portable));
+        std::lock_guard<std::mutex> lock(cacheMutex_);
+        const auto found = cache_.find(snapshot->presetId);
+        if (found != cache_.end() && found->second.first == expectedCache)
+            found->second = { std::move(snapshot), std::move(bytes) };
+    }
     return true;
 }
 
@@ -268,8 +295,15 @@ void ContextManager::onTurnFinished(TerminalTurn terminal)
 {
     if (store_ == nullptr || terminal.presetId.empty())
         return;
-    const auto committed = store_->appendTurn(
-        terminal.presetId, std::move(terminal.turn), terminal.expectedVersion);
+    auto committed = store_->appendTurn(
+        terminal.presetId, terminal.turn, terminal.expectedVersion);
+    if (committed.status == ContextCommitStatus::conflict)
+    {
+        const auto current = store_->load(terminal.presetId);
+        if (current.ok)
+            committed = store_->appendTurn(
+                terminal.presetId, terminal.turn, current.context.revision);
+    }
     if (committed.status == ContextCommitStatus::committed) {
         const auto loaded = store_->load(terminal.presetId);
         if (loaded.ok)

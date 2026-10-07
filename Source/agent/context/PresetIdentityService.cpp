@@ -82,6 +82,44 @@ PresetActivation PresetIdentityService::activateVoice(const CanonicalVoice& voic
     return { id, voiceFingerprint, true };
 }
 
+std::optional<PresetId> PresetIdentityService::createPreset()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto id = juce::Uuid().toString().toStdString();
+    state_.records.emplace(id, Record {});
+    if (!saveUnlocked()) {
+        state_.records.erase(id);
+        return std::nullopt;
+    }
+    return id;
+}
+
+bool PresetIdentityService::adoptPreset(
+    const PresetId& presetId, const CanonicalVoice& voice)
+{
+    if (!validId(presetId))
+        return false;
+    const auto voiceFingerprint = fingerprint(voice);
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto previous = state_;
+    auto [record, unused] = state_.records.try_emplace(presetId, Record {});
+    static_cast<void>(unused);
+    const auto mapped = state_.fingerprintToPreset.find(voiceFingerprint);
+    if (mapped == state_.fingerprintToPreset.end() || mapped->second == presetId)
+    {
+        if (std::find(record->second.fingerprints.begin(), record->second.fingerprints.end(),
+                      voiceFingerprint) == record->second.fingerprints.end())
+            record->second.fingerprints.push_back(voiceFingerprint);
+        state_.fingerprintToPreset[voiceFingerprint] = presetId;
+    }
+    if (!saveUnlocked())
+    {
+        state_ = previous;
+        return false;
+    }
+    return true;
+}
+
 bool PresetIdentityService::updateFingerprint(const PresetId& presetId, const CanonicalVoice& voice)
 {
     const auto voiceFingerprint = fingerprint(voice);

@@ -1,6 +1,8 @@
 #include "PresetLibraryService.h"
 
 #include "../../PluginProcessor.h"
+#include "../../agent/AgentController.h"
+#include "../../agent/context/ConversationContextStore.h"
 
 #include <algorithm>
 #include <cstring>
@@ -40,11 +42,37 @@ CartridgeLoadResult loadCartridgeFile(const juce::File& file)
     return { { true, juce::String::fromUTF8("音色库已打开 / Cartridge opened"), false },
              candidate };
 }
+
+agent::context::CanonicalVoice canonicalVoice(Cartridge& cartridge, int slot)
+{
+    std::array<std::uint8_t, 161> unpacked {};
+    cartridge.unpackProgram(unpacked.data(), slot);
+    agent::context::CanonicalVoice result {};
+    std::copy_n(unpacked.begin(), result.size(), result.begin());
+    return result;
 }
 
-PresetLibraryService::PresetLibraryService(DexedAudioProcessor& processor)
-    : processor_(processor), userDirectory_(DexedAudioProcessor::dexedCartDir)
+agent::context::CanonicalVoice currentVoice(const DexedAudioProcessor& processor)
 {
+    agent::context::CanonicalVoice result {};
+    std::copy_n(processor.data, result.size(), result.begin());
+    return result;
+}
+}
+
+PresetLibraryService::PresetLibraryService(
+    DexedAudioProcessor& processor,
+    std::shared_ptr<agent::context::PresetIdentityService> identities)
+    : processor_(processor), identities_(std::move(identities)),
+      userDirectory_(DexedAudioProcessor::dexedCartDir)
+{
+    if (identities_ == nullptr && processor_.hasAgentController())
+        identities_ = std::make_shared<agent::context::PresetIdentityService>(
+            agent::context::ConversationContextStore::defaultRoot()
+                .getChildFile("preset-index.json"));
+    if (processor_.hasAgentController())
+        if (const auto activation = activationForActiveSlot(processor_.getCurrentProgram()))
+            activateAgentContext(*activation);
 }
 
 PresetLibraryService::~PresetLibraryService()
@@ -165,12 +193,19 @@ UiOperationResult PresetLibraryService::activateBrowserSlot(int index)
     if (!validSlot(index))
         return failure(juce::String::fromUTF8("音色编号无效 / Invalid preset slot"));
 
+    cancelAgentRequest();
     std::array<uint8_t, 161> unpacked {};
     browserCart_.unpackProgram(unpacked.data(), index);
     unpacked[155] = sysexChecksum(unpacked.data(), 155);
     if (processor_.updateProgramFromSysex(unpacked.data()) != 0)
         return failure(juce::String::fromUTF8("音色数据无效 / Invalid program data"));
     browserSelection_ = index;
+    if (identities_ != nullptr && processor_.hasAgentController())
+    {
+        const auto activation = identities_->activateVoice(canonicalVoice(browserCart_, index));
+        if (!activateAgentContext(activation))
+            return failure(juce::String::fromUTF8(u8"音色已载入，但无法切换对话上下文。"));
+    }
     processor_.updateHostDisplay();
     return success(juce::String::fromUTF8("试听音色已载入 / Browser preset activated"));
 }
@@ -179,7 +214,12 @@ UiOperationResult PresetLibraryService::activateActiveSlot(int index)
 {
     if (!validSlot(index))
         return failure(juce::String::fromUTF8("音色编号无效 / Invalid preset slot"));
+    cancelAgentRequest();
+    captureCurrentFingerprint();
     processor_.setCurrentProgram(index);
+    if (const auto activation = activationForActiveSlot(index);
+        activation.has_value() && !activateAgentContext(*activation))
+        return failure(juce::String::fromUTF8(u8"音色已载入，但无法切换对话上下文。"));
     processor_.updateHostDisplay();
     return success(juce::String::fromUTF8("当前音色已载入 / Active preset loaded"));
 }
@@ -192,12 +232,33 @@ UiOperationResult PresetLibraryService::copyBrowserToActive(
     if (!validSlot(source) || !validSlot(destination))
         return failure(juce::String::fromUTF8("音色编号无效 / Invalid preset slot"));
 
+    cancelAgentRequest();
+    std::optional<agent::context::PresetActivation> copiedActivation;
+    if (identities_ != nullptr && processor_.hasAgentController())
+    {
+        const auto sourceActivation = identities_->activateVoice(
+            canonicalVoice(browserCart_, source));
+        const auto copiedId = identities_->clonePreset(sourceActivation.presetId);
+        if (!copiedId.has_value()
+            || !processor_.agentController().clonePresetContext(
+                sourceActivation.presetId, *copiedId))
+            return failure(juce::String::fromUTF8(u8"无法复制音色对话上下文。"));
+        copiedActivation = agent::context::PresetActivation {
+            *copiedId, sourceActivation.fingerprint, true };
+    }
+
     auto candidate = processor_.currentCart;
     const auto bytes = browserCart_.programBytes(source);
     candidate.replaceProgram(destination, bytes.data());
     processor_.loadCartridge(candidate);
+    if (copiedActivation.has_value())
+        identities_->bindSlot(destination, copiedActivation->presetId);
     if (destination == processor_.getCurrentProgram())
+    {
         processor_.setCurrentProgram(destination);
+        if (copiedActivation.has_value())
+            activateAgentContext(*copiedActivation);
+    }
     return success(juce::String::fromUTF8("音色已复制 / Preset copied"));
 }
 
@@ -208,6 +269,12 @@ UiOperationResult PresetLibraryService::moveActiveSlot(int source, int destinati
     if (source == destination)
         return success(juce::String::fromUTF8("位置未改变 / Preset position unchanged"));
 
+    cancelAgentRequest();
+    captureCurrentFingerprint();
+    if (identities_ != nullptr)
+        for (int slot = std::min(source, destination);
+             slot <= std::max(source, destination); ++slot)
+            activationForActiveSlot(slot);
     auto candidate = processor_.currentCart;
     const auto moved = candidate.programBytes(source);
     if (source < destination)
@@ -232,7 +299,11 @@ UiOperationResult PresetLibraryService::moveActiveSlot(int source, int destinati
     else if (destination < source && current >= destination && current < source)
         ++current;
     processor_.loadCartridge(candidate);
+    if (identities_ != nullptr)
+        identities_->moveSlot(source, destination);
     processor_.setCurrentProgram(current);
+    if (const auto activation = activationForActiveSlot(current))
+        activateAgentContext(*activation);
     return success(juce::String::fromUTF8("音色已移动 / Preset moved"));
 }
 
@@ -272,11 +343,17 @@ UiOperationResult PresetLibraryService::renameActiveSlot(
 {
     if (!validSlot(index))
         return failure(juce::String::fromUTF8("音色编号无效 / Invalid preset slot"));
+    if (index == processor_.getCurrentProgram())
+        cancelAgentRequest();
     auto candidate = processor_.currentCart;
     candidate.setProgramNameBytes(index, preview.bytes);
     processor_.loadCartridge(candidate);
     if (index == processor_.getCurrentProgram())
         processor_.setCurrentProgram(index);
+    if (identities_ != nullptr)
+        if (const auto id = identities_->presetForSlot(index))
+            identities_->updateFingerprint(
+                *id, canonicalVoice(processor_.currentCart, index));
     return success(juce::String::fromUTF8("音色已重命名 / Preset renamed"));
 }
 
@@ -285,25 +362,69 @@ UiOperationResult PresetLibraryService::storeCurrentProgram(
 {
     if (!validSlot(destination))
         return failure(juce::String::fromUTF8("音色编号无效 / Invalid preset slot"));
+    cancelAgentRequest();
+    const auto sourceSlot = processor_.getCurrentProgram();
+    const auto sourceActivation = activationForActiveSlot(sourceSlot);
+    std::optional<agent::context::PresetActivation> destinationActivation;
+    if (identities_ != nullptr && processor_.hasAgentController()
+        && sourceActivation.has_value() && destination != sourceSlot)
+    {
+        const auto clone = identities_->clonePreset(sourceActivation->presetId);
+        if (!clone.has_value()
+            || !processor_.agentController().clonePresetContext(
+                sourceActivation->presetId, *clone))
+            return failure(juce::String::fromUTF8(u8"无法复制音色对话上下文。"));
+        destinationActivation = agent::context::PresetActivation { *clone, {}, true };
+    }
+    else
+        destinationActivation = sourceActivation;
+
     auto candidate = processor_.currentCart;
     candidate.packProgram(processor_.data, destination,
                           preview.normalized, processor_.controllers.opSwitch);
     candidate.setProgramNameBytes(destination, preview.bytes);
     processor_.loadCartridge(candidate);
+    if (destinationActivation.has_value() && identities_ != nullptr)
+    {
+        identities_->bindSlot(destination, destinationActivation->presetId);
+        identities_->updateFingerprint(destinationActivation->presetId,
+            canonicalVoice(processor_.currentCart, destination));
+    }
     processor_.setCurrentProgram(destination);
+    if (destinationActivation.has_value())
+        activateAgentContext(*destinationActivation);
     processor_.updateHostDisplay();
     return success(juce::String::fromUTF8("当前音色已存储 / Current program stored"));
 }
 
 UiOperationResult PresetLibraryService::initializeCurrentProgram()
 {
+    cancelAgentRequest();
     processor_.resetToInitVoice();
+    if (const auto activation = freshActivation())
+    {
+        identities_->bindSlot(processor_.getCurrentProgram(), activation->presetId);
+        activateAgentContext(*activation);
+    }
     processor_.updateHostDisplay();
     return success(juce::String::fromUTF8("当前音色已初始化 / Current program initialized"));
 }
 
+void PresetLibraryService::adoptCurrentAgentContext()
+{
+    if (identities_ == nullptr || !processor_.hasAgentController())
+        return;
+    const auto conversation = processor_.agentController().currentConversation();
+    if (conversation.empty())
+        return;
+    const auto slot = processor_.getCurrentProgram();
+    identities_->adoptPreset(conversation->presetId, currentVoice(processor_));
+    identities_->bindSlot(slot, conversation->presetId);
+}
+
 UiOperationResult PresetLibraryService::createActiveCartridge()
 {
+    cancelAgentRequest();
     Cartridge candidate;
     for (int index = 0; index < 32; ++index)
     {
@@ -314,7 +435,83 @@ UiOperationResult PresetLibraryService::createActiveCartridge()
     processor_.loadCartridge(candidate);
     processor_.activeFileCartridge = juce::File {};
     processor_.setCurrentProgram(0);
+    std::optional<agent::context::PresetActivation> first;
+    if (identities_ != nullptr && processor_.hasAgentController())
+        for (int index = 0; index < 32; ++index)
+            if (const auto activation = freshActivation())
+            {
+                identities_->bindSlot(index, activation->presetId);
+                if (index == 0)
+                    first = activation;
+            }
+    if (first.has_value())
+        activateAgentContext(*first);
     return success(juce::String::fromUTF8("新音色库已创建 / New cartridge created"));
+}
+
+std::optional<agent::context::PresetActivation>
+PresetLibraryService::activationForActiveSlot(int index)
+{
+    if (identities_ == nullptr || !validSlot(index))
+        return std::nullopt;
+    const auto voice = canonicalVoice(processor_.currentCart, index);
+    const auto fingerprint = agent::context::PresetIdentityService::fingerprint(voice);
+    if (const auto existing = identities_->presetForSlot(index))
+    {
+        identities_->updateFingerprint(*existing, voice);
+        return agent::context::PresetActivation { *existing, fingerprint, false };
+    }
+
+    auto activation = identities_->activateVoice(voice);
+    bool boundElsewhere = false;
+    for (int slot = 0; slot < 32; ++slot)
+        if (slot != index && identities_->presetForSlot(slot) == activation.presetId)
+        {
+            boundElsewhere = true;
+            break;
+        }
+    if (boundElsewhere)
+    {
+        const auto fresh = identities_->createPreset();
+        if (!fresh.has_value())
+            return std::nullopt;
+        activation = { *fresh, fingerprint, true };
+    }
+    if (!identities_->bindSlot(index, activation.presetId))
+        return std::nullopt;
+    return activation;
+}
+
+std::optional<agent::context::PresetActivation>
+PresetLibraryService::freshActivation()
+{
+    if (identities_ == nullptr || !processor_.hasAgentController())
+        return std::nullopt;
+    const auto id = identities_->createPreset();
+    if (!id.has_value())
+        return std::nullopt;
+    return agent::context::PresetActivation { *id, {}, true };
+}
+
+bool PresetLibraryService::activateAgentContext(
+    const agent::context::PresetActivation& activation)
+{
+    return !processor_.hasAgentController()
+        || processor_.agentController().activatePreset(activation);
+}
+
+void PresetLibraryService::captureCurrentFingerprint()
+{
+    if (identities_ == nullptr)
+        return;
+    if (const auto id = identities_->presetForSlot(processor_.getCurrentProgram()))
+        identities_->updateFingerprint(*id, currentVoice(processor_));
+}
+
+void PresetLibraryService::cancelAgentRequest()
+{
+    if (processor_.hasAgentController())
+        processor_.agentController().cancel();
 }
 
 UiOperationResult PresetLibraryService::saveActiveCartridge(

@@ -26,6 +26,8 @@ public:
     explicit PresetIdentityService(juce::File indexFile);
 
     PresetActivation activateVoice(const CanonicalVoice& voice);
+    std::optional<PresetId> createPreset();
+    bool adoptPreset(const PresetId& presetId, const CanonicalVoice& voice);
     bool updateFingerprint(const PresetId& presetId, const CanonicalVoice& voice);
     std::optional<PresetId> clonePreset(const PresetId& source);
     std::optional<PresetId> clonedFrom(const PresetId& presetId) const;

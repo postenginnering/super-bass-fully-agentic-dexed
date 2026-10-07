@@ -3,6 +3,10 @@
 #include <JuceHeader.h>
 
 #include "PluginProcessor.h"
+#include "agent/AgentController.h"
+#include "agent/context/PortablePresetContext.h"
+#include "agent/context/PresetIdentityService.h"
+#include "agent/session/AgentSession.h"
 #include "state/SynthStateService.h"
 #include "ui/presets/PresetLibraryService.h"
 
@@ -187,6 +191,88 @@ public:
         shortLived.reset();
         agentic_dexed::test::pumpMessagesFor(50);
         expect(!lateCallback.load());
+
+        beginTest("preset lifecycle switches, moves, clones, clears and restores conversations");
+        const auto indexFile = temp.getChildFile("preset-index.json");
+        auto identities = std::make_shared<agentic_dexed::agent::context::PresetIdentityService>(
+            indexFile);
+        DexedAudioProcessor lifecycleProcessor;
+        PresetLibraryService lifecycle(lifecycleProcessor, identities);
+        auto& controller = lifecycleProcessor.agentController();
+        expect(lifecycle.activateActiveSlot(0).ok);
+        const auto slotZero = controller.currentConversation();
+        expect(!slotZero.empty());
+        const auto slotZeroId = slotZero.empty() ? std::string() : slotZero->presetId;
+
+        agentic_dexed::agent::context::PresetConversationContext remembered;
+        remembered.presetId = slotZeroId;
+        remembered.recentTurns.push_back({ "slot-zero-turn",
+            agentic_dexed::agent::context::TurnTerminalState::completed,
+            { { agentic_dexed::agent::context::ConversationRole::user, u8"零号音色做得更温暖" },
+              { agentic_dexed::agent::context::ConversationRole::assistant, u8"已经调暖。" } }, {} });
+        expect(controller.importPortableContext(
+            agentic_dexed::agent::context::encodePortableContext(remembered)));
+
+        expect(lifecycle.activateActiveSlot(1).ok);
+        const auto slotOne = controller.currentConversation();
+        expect(!slotOne.empty());
+        expect(slotOne->presetId != slotZeroId);
+        expect(slotOne->recentTurns.empty());
+        expect(lifecycle.activateActiveSlot(0).ok);
+        expectEquals(controller.currentConversation()->presetId, slotZeroId);
+        expectEquals(static_cast<int>(controller.currentConversation()->recentTurns.size()), 1);
+        for (int attempt = 0; attempt < 100
+             && controller.snapshot().transcript.empty(); ++attempt)
+            agentic_dexed::test::pumpMessagesFor(5);
+        expect(std::any_of(controller.snapshot().transcript.begin(),
+                           controller.snapshot().transcript.end(), [](const auto& entry) {
+            return entry.text.find(u8"零号音色") != std::string::npos;
+        }));
+
+        const auto renamed = lifecycle.previewDx7Name("RENAMED");
+        expect(lifecycle.renameActiveSlot(0, renamed).ok);
+        expectEquals(controller.currentConversation()->presetId, slotZeroId);
+        expect(lifecycle.moveActiveSlot(0, 2).ok);
+        expectEquals(controller.currentConversation()->presetId, slotZeroId);
+
+        expect(lifecycle.storeCurrentProgram(3, lifecycle.previewDx7Name("CLONED")).ok);
+        const auto cloned = controller.currentConversation();
+        expect(!cloned.empty());
+        expect(cloned->presetId != slotZeroId);
+        expectEquals(static_cast<int>(cloned->recentTurns.size()), 1);
+        auto changedClone = *cloned.snapshot();
+        changedClone.recentTurns.push_back({ "clone-only-turn",
+            agentic_dexed::agent::context::TurnTerminalState::completed,
+            { { agentic_dexed::agent::context::ConversationRole::user, u8"只修改副本" },
+              { agentic_dexed::agent::context::ConversationRole::assistant, u8"副本已修改。" } }, {} });
+        expect(controller.importPortableContext(
+            agentic_dexed::agent::context::encodePortableContext(changedClone)));
+        expect(lifecycle.activateActiveSlot(2).ok);
+        expectEquals(controller.currentConversation()->presetId, slotZeroId);
+        expectEquals(static_cast<int>(controller.currentConversation()->recentTurns.size()), 1);
+        expect(lifecycle.activateActiveSlot(3).ok);
+        expectEquals(static_cast<int>(controller.currentConversation()->recentTurns.size()), 2);
+        expect(lifecycle.activateActiveSlot(2).ok);
+
+        expect(lifecycle.initializeCurrentProgram().ok);
+        const auto initialized = controller.currentConversation();
+        expect(!initialized.empty());
+        expect(initialized->presetId != slotZeroId);
+        expect(initialized->recentTurns.empty());
+
+        auto imported = remembered;
+        imported.presetId = juce::Uuid().toString().toStdString();
+        imported.revision = 0;
+        expect(controller.importPortableContext(
+            agentic_dexed::agent::context::encodePortableContext(imported)));
+        lifecycle.adoptCurrentAgentContext();
+        expect(lifecycle.activateActiveSlot(1).ok);
+        expect(lifecycle.activateActiveSlot(2).ok);
+        expectEquals(controller.currentConversation()->presetId, imported.presetId);
+
+        expect(lifecycle.openBrowserCartridge(validFile).ok);
+        expect(lifecycle.activateBrowserSlot(0).ok);
+        expectEquals(controller.currentConversation()->presetId, slotZeroId);
 
         expect(temp.deleteRecursively());
     }

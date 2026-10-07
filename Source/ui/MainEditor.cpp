@@ -62,23 +62,21 @@ MainEditor::MainEditor(DexedAudioProcessor& processor, bool persistPreferences)
     {
         const auto count = processor_.getNumPrograms();
         if (count > 0)
-            processor_.setCurrentProgram(
+            pageHost_.presetService().activateActiveSlot(
                 (processor_.getCurrentProgram() + count - 1) % count);
-        processor_.updateHostDisplay();
         refreshState();
     };
     patchHeader_.onNext = [this]
     {
         const auto count = processor_.getNumPrograms();
         if (count > 0)
-            processor_.setCurrentProgram((processor_.getCurrentProgram() + 1) % count);
-        processor_.updateHostDisplay();
+            pageHost_.presetService().activateActiveSlot(
+                (processor_.getCurrentProgram() + 1) % count);
         refreshState();
     };
     patchHeader_.onSelectProgram = [this](int index)
     {
-        processor_.setCurrentProgram(index);
-        processor_.updateHostDisplay();
+        pageHost_.presetService().activateActiveSlot(index);
         refreshState();
     };
     patchHeader_.onImport = [this] { requestOpenPreset(); };
@@ -222,6 +220,7 @@ void MainEditor::handleFilesDropped(const juce::StringArray& files)
             }
             processor_.agentController().cancel();
             processor_.setStateInformation(data.getData(), static_cast<int>(data.getSize()));
+            pageHost_.presetService().adoptCurrentAgentContext();
             refreshState();
             if (processor_.lastAgentContextImportSucceeded())
                 statusBar_.setMessage(juce::String::fromUTF8(u8"预设已载入。"), WorkbenchState::success);
