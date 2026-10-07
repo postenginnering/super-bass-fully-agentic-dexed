@@ -29,8 +29,10 @@
 
 ### 验证
 
-- Windows Release 全量 CTest：7/7 通过（Task 8 记录耗时 184.93 秒）。
+- Windows Release 全量 CTest：8/8 通过，共 21,554 项断言、0 失败，记录耗时 187.83 秒。
+- Windows VST3 通过 pluginval strictness 8，覆盖 44.1/48/96 kHz 与 1/32/64/512/1024 采样块。
 - 自动偏好整理、压缩、无效响应保留、取消与关闭路径均有独立回归测试。
-- 真实 DeepSeek Flash `LiveMemory`：26 项断言通过，记录耗时 11.391 秒；临时数据已清理，合成器参数写入次数为 0。
-- 已确认工作树中不存在会话提供的 DeepSeek Key。
+- 真实 DeepSeek Flash `LiveMemory`：26 项断言通过，记录耗时 16.145 秒；临时数据已清理，合成器参数写入次数为 0。
+- 当前树、全部 Git 历史、验证日志、二进制和压缩包均已扫描；会话提供的 DeepSeek Key 为 0 命中。
+- Windows Standalone 已完成隔离配置、高 DPI、预设切换、生成页和产品名称人工冒烟。
 - Apple Silicon 原生构建、pluginval、真实模型与保存重启往返须以新的 Mac 本机报告为准，Windows 结果不替代该验证。
