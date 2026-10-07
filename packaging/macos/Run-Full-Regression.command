@@ -26,7 +26,7 @@ sw_vers >> "$report"
 shasum -a 256 ./AgenticDexedTests './Super Bass Fully Agentic Dexed.app/Contents/MacOS/Super Bass Fully Agentic Dexed' './Super Bass Fully Agentic Dexed.vst3/Contents/MacOS/Super Bass Fully Agentic Dexed' >> "$report"
 printf 'Source-only audit and build-script checks run on the build checkout; this package contains runtime data, not source.\n' >> "$report"
 
-printf '1/3 正在运行本机回归测试…\n'
+printf '1/4 正在运行本机回归测试…\n'
 ./AgenticDexedTests --portable > "$results/runtime.log" 2>&1
 runtime_result=$?
 grep 'SUMMARY:' "$results/runtime.log" >> "$report"
@@ -35,7 +35,7 @@ if [[ -d build/macos/workbench-render ]]; then
 fi
 [[ "$runtime_result" == 0 ]] || finish "$runtime_result"
 
-printf '2/3 正在校验随包的官方插件检查工具…\n'
+printf '2/4 正在校验随包的官方插件检查工具…\n'
 validate_plugin() {
 mkdir -p "$results/pluginval-tool"
 local tool_zip="tools/pluginval_macOS.zip"
@@ -68,11 +68,18 @@ return 0
 validate_plugin
 plugin_result=$?
 
-printf '3/3 正在使用已保存的密钥检查真实模型调用和整轮回退…\n'
+printf '3/4 正在使用已保存的密钥检查真实模型调用和整轮回退…\n'
 ./AgenticDexedTests --portable --filter LiveAgent > "$results/live-agent.log" 2>&1
 live_result=$?
 grep 'SUMMARY:' "$results/live-agent.log" >> "$report"
+printf '4/4 正在检查自动偏好记忆和每预设上下文压缩…\n'
+./AgenticDexedTests --portable --filter LiveMemory > "$results/live-memory.log" 2>&1
+memory_result=$?
+grep -E 'SUMMARY:|ELAPSED_MS:' "$results/live-memory.log" >> "$report"
 if [[ "$plugin_result" != 0 ]]; then
     finish "$plugin_result"
 fi
-finish "$live_result"
+if [[ "$live_result" != 0 ]]; then
+    finish "$live_result"
+fi
+finish "$memory_result"

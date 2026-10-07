@@ -2,6 +2,7 @@
 #include "TestDataPaths.h"
 
 #include <iostream>
+#include <chrono>
 
 #if JUCE_MAC
 namespace juce
@@ -36,6 +37,7 @@ bool matchesFilter(const juce::UnitTest& test, const juce::String& filter)
 
 int main(int argc, char** argv)
 {
+    const auto testStarted = std::chrono::steady_clock::now();
    #if JUCE_MAC
     juce::initialiseNSApplication();
    #endif
@@ -108,5 +110,9 @@ int main(int argc, char** argv)
     }
 
     std::cout << "SUMMARY: " << passes << " passed, " << failures << " failed\n";
+    std::cout << "ELAPSED_MS: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     std::chrono::steady_clock::now() - testStarted).count()
+              << '\n';
     return failures == 0 ? 0 : 1;
 }

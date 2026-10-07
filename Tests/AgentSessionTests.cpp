@@ -5,6 +5,7 @@
 
 #include "agent/session/AgentSession.h"
 #include "agent/memory/SynthMemory.h"
+#include "agent/memory/MemoryMaintenanceService.h"
 #include "agent/context/ContextManager.h"
 #include "agent/AgentLimits.h"
 #include "agent/AgentController.h"
@@ -855,17 +856,27 @@ AgentSessionTests agentSessionTests;
 class LiveMemoryTests final : public juce::UnitTest
 {
 public:
-    LiveMemoryTests() : juce::UnitTest("Real provider local memory", "LiveMemory") {}
+    LiveMemoryTests() : juce::UnitTest("Real provider automatic memory", "LiveMemory") {}
     void runTest() override
     {
-        beginTest("Real provider remembers, recalls and clears Chinese preferences without changing sound");
-        const auto key = juce::SystemStats::getEnvironmentVariable("DEEPSEEK_API_KEY", "");
-        expect(key.isNotEmpty(), "DEEPSEEK_API_KEY is required for this opt-in test");
-        if (key.isEmpty()) return;
+        beginTest("Real DeepSeek selectively curates preferences and compacts per-preset context");
+        auto environmentKey = juce::SystemStats::getEnvironmentVariable("DEEPSEEK_API_KEY", "");
+        SecureSecret key(environmentKey.toStdString());
+        environmentKey = {};
+        if (key.empty())
+        {
+            auto platformStore = createPlatformCredentialStore();
+            auto stored = platformStore->load("agent.model");
+            if (stored.ok()) key = std::move(stored.secret);
+        }
+        expect(!key.empty(), "Save the DeepSeek key in Agent settings, or set DEEPSEEK_API_KEY");
+        if (key.empty()) return;
         const auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
             .getNonexistentChildFile("sbfad-live-memory", "", false);
         struct Cleanup { juce::File directory; ~Cleanup() { directory.deleteRecursively(); } } cleanup { directory };
-        auto memory = std::make_shared<memory::SynthMemory>(directory.getChildFile("synth.md"));
+        directory.createDirectory();
+        auto contextStore = std::make_shared<context::ConversationContextStore>(directory);
+        auto contextManager = std::make_shared<context::ContextManager>(contextStore);
         ParameterRegistry registry = ParameterRegistry::createDexed();
         SessionBackend backend(registry);
         SynthStateService state(registry, backend);
@@ -873,36 +884,119 @@ public:
         SessionSave save;
         AgentToolDispatcher dispatcher(registry, state, audition, save);
         MemoryCredentialStore credentials;
-        credentials.store("provider.test", key.toStdString());
+        credentials.store("provider.test", key.view());
+        key.clear();
         http::JuceHttpTransport transport;
         ChatCompletionsClient model(transport);
-        auto run = [&](const char* prompt) {
-            AgentSession session(model, dispatcher, credentials, memory);
+        auto maintenance = std::make_shared<memory::MemoryMaintenanceService>(
+            model, credentials, contextStore, contextManager);
+
+        AgentPreferences preferences;
+        preferences.protocol = ProviderProtocol::chatCompletions;
+        preferences.baseUrl = "https://api.deepseek.com";
+        preferences.model = "deepseek-flash";
+
+        auto terminalTurn = [&](const std::string& presetId,
+                                std::uint64_t version,
+                                std::string id,
+                                std::string prompt) {
+            context::TerminalTurn terminal;
+            terminal.presetId = presetId;
+            terminal.expectedVersion = version;
+            terminal.provider = preferences.providerConfig();
+            terminal.credentialId = "provider.test";
+            terminal.turn.turnId = std::move(id);
+            terminal.turn.messages = {
+                { context::ConversationRole::user, std::move(prompt) },
+                { context::ConversationRole::assistant, u8"已完成当前请求" }
+            };
+            maintenance->onTurnFinished(std::move(terminal));
+            expect(maintenance->waitUntilIdle(180s), "Background memory request timed out");
+        };
+
+        const auto originalPreset = juce::Uuid().toString().toStdString();
+        terminalTurn(originalPreset, 0, "live-one-off", u8"这次做一个明亮的 pad");
+        const auto afterOneOff = contextStore->loadPreferences();
+        expect(afterOneOff.ok);
+        expect(!afterOneOff.text.contains(u8"明亮"),
+               "A single one-off request must not become a durable preference");
+
+        terminalTurn(originalPreset, 1, "live-lasting",
+            u8"我一般偏好温暖柔和、低频饱满的 pad，避免刺耳高频");
+        const auto saved = contextStore->loadPreferences();
+        expect(saved.ok && saved.text.contains("- ["),
+               "An explicit lasting preference must be curated automatically");
+        expect(saved.text.contains(u8"温暖") || saved.text.contains(u8"柔和")
+               || saved.text.contains(u8"低频"));
+
+        AgentSession session(
+            model, dispatcher, credentials, {}, contextManager, maintenance);
+        auto run = [&](const std::string& presetId, const char* prompt) {
             UserAgentRequest request;
+            request.presetId = presetId;
             request.prompt = prompt;
             request.credentialId = "provider.test";
-            request.preferences.protocol = ProviderProtocol::chatCompletions;
-            request.preferences.baseUrl = "https://api.deepseek.com";
-            request.preferences.model = "deepseek-flash";
+            request.preferences = preferences;
             session.start(request);
-            expect(pumpUntil(session, terminal, 120s), "Live memory request timed out");
+            expect(pumpUntil(session, terminal, 180s), "Live memory request timed out");
             const auto snapshot = session.snapshot();
             expect(snapshot.state == AgentSessionState::completed, juce::String(snapshot.errorCode));
+            expect(maintenance->waitUntilIdle(180s), "Background maintenance timed out");
             return snapshot;
         };
-        const auto remember = run(u8"请记住我的长期音色偏好：我通常喜欢温暖柔和、低频饱满的 pad，避免刺耳高频。这次只保存这个偏好，不修改音色。");
-        bool wrote = false;
-        for (const auto& entry : remember.transcript)
-            if (entry.kind == AgentTranscriptKind::toolCall && entry.toolName == "update_synth_memory") wrote = true;
-        expect(wrote);
-        const auto saved = memory->read(key);
-        expect(saved.ok && saved.text.contains("- ["));
-        const auto recalled = run(u8"我之前让你记住的 pad 偏好是什么？只用中文回答，不修改音色或记忆。");
+
+        const auto newPreset = juce::Uuid().toString().toStdString();
+        const auto builtForNewPreset = contextManager->buildRequestContext(
+            newPreset, u8"我的长期 pad 偏好是什么？", "PRIMARY SYSTEM");
+        expect(builtForNewPreset.ok);
+        std::string newPresetInput;
+        for (const auto& message : builtForNewPreset.messages)
+            newPresetInput += message.text + "\n";
+        expect(newPresetInput.find(u8"温暖") != std::string::npos
+               || newPresetInput.find(u8"柔和") != std::string::npos);
+        expect(newPresetInput.find(u8"这次做一个明亮的 pad") == std::string::npos,
+               "A new preset must not inherit another preset's conversation");
+        const auto recalled = run(newPreset,
+            u8"我的长期 pad 音色偏好是什么？只用中文自然语言回答，不修改音色。");
         expect(!recalled.finalText.empty());
-        expectEquals(memory->read(key).text, saved.text);
-        run(u8"请清空你记住的全部长期音色偏好，这次只清空记忆，不修改音色。");
-        expect(!memory->read(key).text.contains("- ["));
+        expect(recalled.finalText.find(u8"温暖") != std::string::npos
+               || recalled.finalText.find(u8"柔和") != std::string::npos
+               || recalled.finalText.find(u8"低频") != std::string::npos);
         expectEquals(backend.writes.load(), 0);
+
+        const auto longPreset = juce::Uuid().toString().toStdString();
+        context::PresetConversationContext longContext;
+        longContext.presetId = longPreset;
+        for (int index = 0; index < 12; ++index)
+        {
+            context::ConversationTurn turn;
+            turn.turnId = "live-history-" + std::to_string(index);
+            turn.messages = {
+                { context::ConversationRole::user,
+                  u8"逐步把 pad 做得更柔和，步骤 " + std::to_string(index) },
+                { context::ConversationRole::assistant,
+                  u8"已保留柔和方向，步骤 " + std::to_string(index) }
+            };
+            longContext.recentTurns.push_back(std::move(turn));
+        }
+        expect(contextStore->commit(longContext, 0).status
+               == context::ContextCommitStatus::committed);
+        terminalTurn(longPreset, 1, "live-history-12",
+            u8"继续整理这个 pad 的空间感");
+        const auto compacted = contextStore->load(longPreset);
+        expect(compacted.ok && compacted.exists);
+        expectEquals(static_cast<int>(compacted.context.recentTurns.size()), 8);
+        expect(compacted.context.summary.size() > 0);
+        expectEquals(compacted.context.recentTurns.back().turnId,
+                     std::string("live-history-12"));
+        const auto afterCompaction = contextManager->buildRequestContext(
+            longPreset, u8"继续刚才的方向", "PRIMARY SYSTEM");
+        expect(afterCompaction.ok);
+        expect(!afterCompaction.context.empty());
+        expectEquals(static_cast<int>(afterCompaction.context->recentTurns.size()), 8);
+
+        maintenance->shutdown();
+        expect(directory.exists(), "Temporary data should exist until test cleanup");
     }
 } liveMemoryTests;
 }
