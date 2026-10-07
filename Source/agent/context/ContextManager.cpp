@@ -255,6 +255,23 @@ bool ContextManager::installPortableContext(PresetConversationContext context,
     return true;
 }
 
+bool ContextManager::adoptPersistedConversation(PresetConversationContext context)
+{
+    auto portable = encodePortableContext(context);
+    if (portable.isEmpty())
+        return false;
+    auto snapshot = std::make_shared<const PresetConversationContext>(std::move(context));
+    auto bytes = std::make_shared<const juce::MemoryBlock>(std::move(portable));
+    const auto presetId = snapshot->presetId;
+    std::lock_guard<std::mutex> lock(cacheMutex_);
+    const auto found = cache_.find(presetId);
+    if (found != cache_.end()
+        && found->second.first->revision >= snapshot->revision)
+        return false;
+    cache_[presetId] = { std::move(snapshot), std::move(bytes) };
+    return true;
+}
+
 bool ContextManager::persistConversation(PresetConversationContext context)
 {
     if (store_ == nullptr)

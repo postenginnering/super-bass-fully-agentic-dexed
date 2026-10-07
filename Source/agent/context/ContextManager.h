@@ -59,6 +59,7 @@ public:
     juce::MemoryBlock portableSnapshot(const PresetId& presetId) const;
     bool installPortableContext(PresetConversationContext context,
                                 juce::MemoryBlock encoded);
+    bool adoptPersistedConversation(PresetConversationContext context);
     bool persistConversation(PresetConversationContext context);
     void onTurnFinished(TerminalTurn turn) override;
 

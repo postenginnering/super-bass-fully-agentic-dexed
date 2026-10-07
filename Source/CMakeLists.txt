@@ -162,6 +162,10 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/memory/SynthMemory.h
 	agent/memory/SensitiveDataFilter.cpp
 	agent/memory/SensitiveDataFilter.h
+	agent/memory/PreferenceCurator.cpp
+	agent/memory/PreferenceCurator.h
+	agent/memory/MemoryMaintenanceService.cpp
+	agent/memory/MemoryMaintenanceService.h
 	agent/context/ConversationTypes.h
 	agent/context/ConversationSerialization.cpp
 	agent/context/ConversationSerialization.h
@@ -171,6 +175,8 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/context/ConversationContextStore.h
 	agent/context/ContextManager.cpp
 	agent/context/ContextManager.h
+	agent/context/ContextCompactor.cpp
+	agent/context/ContextCompactor.h
 	agent/context/PortablePresetContext.cpp
 	agent/context/PortablePresetContext.h
 	agent/session/AgentPrompt.h

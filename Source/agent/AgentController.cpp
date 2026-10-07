@@ -5,6 +5,7 @@
 #include "context/PortablePresetContext.h"
 #include "model/ChatCompletionsClient.h"
 #include "model/ResponsesClient.h"
+#include "memory/MemoryMaintenanceService.h"
 #include "http/JuceHttpTransport.h"
 #include "session/AgentSession.h"
 #include "tools/AgentToolDispatcher.h"
@@ -189,7 +190,9 @@ public:
           dispatcher_(registry, stateService, audition_, *this),
           contextStore_(std::make_shared<context::ConversationContextStore>()),
           contextManager_(std::make_shared<context::ContextManager>(contextStore_)),
-          session_(router_, dispatcher_, credentials_, {}, contextManager_, contextManager_),
+          memoryMaintenance_(std::make_shared<memory::MemoryMaintenanceService>(
+              router_, credentials_, contextStore_, contextManager_)),
+          session_(router_, dispatcher_, credentials_, {}, contextManager_, memoryMaintenance_),
           connectionWorker_([this] { connectionWorkerLoop(); })
     {
         currentPresetId_ = juce::Uuid().toString().toStdString();
@@ -522,6 +525,7 @@ public:
     tools::AgentToolDispatcher dispatcher_;
     std::shared_ptr<context::ConversationContextStore> contextStore_;
     std::shared_ptr<context::ContextManager> contextManager_;
+    std::shared_ptr<memory::MemoryMaintenanceService> memoryMaintenance_;
     session::AgentSession session_;
 
     mutable std::mutex presetMutex_;

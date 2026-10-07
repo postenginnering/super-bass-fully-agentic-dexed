@@ -187,6 +187,24 @@ public:
         const auto conflictText = joined(afterConflict.messages);
         expect(conflictText.find("first request") != std::string::npos);
         expect(conflictText.find("second request") != std::string::npos);
+
+        beginTest("A persisted compaction snapshot cannot overwrite an equal or newer cache");
+        const auto compactRacePreset = newPreset();
+        PresetConversationContext newest;
+        newest.presetId = compactRacePreset;
+        newest.revision = 9;
+        newest.summary = "newest persisted summary";
+        expect(manager.adoptPersistedConversation(newest));
+        auto staleCompaction = newest;
+        staleCompaction.revision = 8;
+        staleCompaction.summary = "stale compaction";
+        expect(!manager.adoptPersistedConversation(staleCompaction));
+        auto equalRevision = newest;
+        equalRevision.summary = "different equal revision";
+        expect(!manager.adoptPersistedConversation(equalRevision));
+        const auto retained = manager.cachedConversation(compactRacePreset);
+        expect(!retained.empty());
+        expectEquals(retained->summary, std::string("newest persisted summary"));
     }
 };
 

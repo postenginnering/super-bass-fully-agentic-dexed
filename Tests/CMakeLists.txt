@@ -28,6 +28,9 @@ target_sources(AgenticDexedTests PRIVATE
     PresetIdentityTests.cpp
     ConversationContextStoreTests.cpp
     ContextManagerTests.cpp
+    PreferenceCuratorTests.cpp
+    ContextCompactorTests.cpp
+    MemoryMaintenanceTests.cpp
     PortablePresetContextTests.cpp
     AgentToolSchemaTests.cpp
     AgentToolDispatcherTests.cpp
