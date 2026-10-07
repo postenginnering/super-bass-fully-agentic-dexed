@@ -12,6 +12,11 @@ namespace agentic_dexed::agent::model { class IModelClient; }
 namespace agentic_dexed::agent::tools { class AgentToolDispatcher; }
 namespace agentic_dexed::security { class ICredentialStore; }
 namespace agentic_dexed::agent::memory { class SynthMemory; }
+namespace agentic_dexed::agent::context {
+class ContextManager;
+class ITurnSink;
+class PresetContextView;
+}
 
 namespace agentic_dexed::agent::session
 {
@@ -71,6 +76,7 @@ struct AgentSessionSnapshot
 struct UserAgentRequest
 {
     std::string prompt;
+    std::string presetId;
     std::string credentialId = "agent.model";
     AgentPreferences preferences;
 };
@@ -89,13 +95,16 @@ public:
         model::IModelClient& modelClient,
         tools::AgentToolDispatcher& toolDispatcher,
         security::ICredentialStore& credentialStore,
-        std::shared_ptr<memory::SynthMemory> memory = {});
+        std::shared_ptr<memory::SynthMemory> memory = {},
+        std::shared_ptr<context::ContextManager> contextManager = {},
+        std::shared_ptr<context::ITurnSink> turnSink = {});
     ~AgentSession();
 
     AgentSession(const AgentSession&) = delete;
     AgentSession& operator=(const AgentSession&) = delete;
 
     void start(UserAgentRequest request);
+    void loadConversation(context::PresetContextView view);
     void confirmProposal(std::string proposalId);
     void cancel() noexcept;
 

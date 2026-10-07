@@ -5,6 +5,7 @@
 
 #include "agent/session/AgentSession.h"
 #include "agent/memory/SynthMemory.h"
+#include "agent/context/ContextManager.h"
 #include "agent/AgentLimits.h"
 #include "agent/AgentController.h"
 #include "ui/AgentPanel.h"
@@ -135,6 +136,11 @@ public:
             requestMessageCounts.push_back(request.messages.size());
             capturedMessages.push_back(request.messages);
             requestToolCounts.push_back(static_cast<std::size_t>(request.tools.size()));
+            std::vector<std::string> names;
+            for (const auto& schema : request.tools)
+                if (const auto* object = schema.getDynamicObject())
+                    names.push_back(object->getProperty("name").toString().toStdString());
+            capturedToolNames.push_back(std::move(names));
             if (!request.messages.empty())
                 firstSystemPrompt = request.messages.front().text;
         }
@@ -150,6 +156,7 @@ public:
     std::vector<std::size_t> requestMessageCounts;
     std::vector<std::vector<ModelMessage>> capturedMessages;
     std::vector<std::size_t> requestToolCounts;
+    std::vector<std::vector<std::string>> capturedToolNames;
     std::string firstSystemPrompt;
 };
 
@@ -175,10 +182,13 @@ public:
 struct SessionHarness
 {
     explicit SessionHarness(std::vector<ModelScript> scripts,
-        std::shared_ptr<memory::SynthMemory> memory = {})
+        std::shared_ptr<memory::SynthMemory> memory = {},
+        std::shared_ptr<context::ContextManager> contextManagerToUse = {},
+        std::shared_ptr<context::ITurnSink> turnSinkToUse = {})
         : backend(registry), state(registry, backend), model(std::move(scripts)),
           dispatcher(registry, state, audition, save),
-          session(model, dispatcher, credentials, std::move(memory))
+          contextManager(std::move(contextManagerToUse)), turnSink(std::move(turnSinkToUse)),
+          session(model, dispatcher, credentials, std::move(memory), contextManager, turnSink)
     {
         credentials.store("provider.test", "sk-session-secret");
     }
@@ -200,6 +210,8 @@ struct SessionHarness
     ScriptedModel model;
     MemoryCredentialStore credentials;
     AgentToolDispatcher dispatcher;
+    std::shared_ptr<context::ContextManager> contextManager;
+    std::shared_ptr<context::ITurnSink> turnSink;
     AgentSession session;
 };
 
@@ -477,45 +489,63 @@ public:
 
     void runTest() override
     {
-        beginTest("Memory tool persists Chinese preferences and next session recalls them as data");
+        beginTest("Consecutive requests restore the same preset and expose no memory write tool");
         {
             const auto directory = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                .getNonexistentChildFile("sbfad-session-memory", "", false);
-            auto memory = std::make_shared<memory::SynthMemory>(directory.getChildFile("synth.md"));
-            SessionHarness first({ completedTool("remember", "m1", "update_synth_memory",
-                u8R"({"operation":"remember","key":"pad_brightness","preference":"偏好温暖柔和的 pad","evidence":"我通常喜欢温暖柔和的 pad"})"),
-                completedText("done", "Remembered") }, memory);
+                .getChildFile("sbfad-session-context-" + juce::Uuid().toString());
+            auto store = std::make_shared<context::ConversationContextStore>(directory);
+            auto manager = std::make_shared<context::ContextManager>(store);
+            const auto preset = juce::Uuid().toString().toStdString();
+            SessionHarness first({ completedText("first", u8"已经做成温暖柔和的 pad") }, {}, manager, manager);
             auto request = first.request();
-            request.prompt = u8"记住，我通常喜欢温暖柔和的 pad";
+            request.presetId = preset;
+            request.prompt = u8"做一个温暖柔和的 pad";
             first.session.start(request);
             expect(pumpUntil(first.session, terminal));
             expect(first.session.snapshot().state == AgentSessionState::completed);
-            expect(memory->read().text.contains(juce::String::fromUTF8("偏好温暖柔和")));
             expectEquals(first.backend.writes.load(), 0);
-            SessionHarness next({ completedText("next", "Understood") }, memory);
+            {
+                std::lock_guard<std::mutex> lock(first.model.mutex);
+                expect(std::none_of(first.model.capturedToolNames.front().begin(),
+                                    first.model.capturedToolNames.front().end(),
+                    [](const auto& name) { return name == "update_synth_memory"; }));
+            }
+
+            SessionHarness next({ completedText("next", u8"已经进一步调亮") }, {}, manager, manager);
             auto overrideRequest = next.request();
-            overrideRequest.prompt = u8"这一次要明亮的 pad，不要修改长期偏好";
-            const auto before = memory->read().text;
+            overrideRequest.presetId = preset;
+            overrideRequest.prompt = u8"这一次稍微明亮一点";
             next.session.start(overrideRequest);
             expect(pumpUntil(next.session, terminal));
             {
                 std::lock_guard<std::mutex> lock(next.model.mutex);
-                const auto userContext = juce::JSON::parse(juce::String(next.model.capturedMessages.front()[1].text));
-                expect(userContext["synth_memory"].toString().contains(juce::String::fromUTF8("温暖柔和")));
-                expectEquals(userContext["current_request"].toString(), juce::String(overrideRequest.prompt));
-                expect(juce::String(next.model.firstSystemPrompt).contains("CURRENT user request"));
+                std::string combined;
+                for (const auto& message : next.model.capturedMessages.front())
+                    combined += message.text + "\n";
+                expect(combined.find(u8"做一个温暖柔和的 pad") != std::string::npos);
+                expect(combined.find(u8"已经做成温暖柔和的 pad") != std::string::npos);
+                expectEquals(next.model.capturedMessages.front().back().text, overrideRequest.prompt);
             }
-            expectEquals(memory->read().text, before);
-            SessionHarness rejected({ completedTool("bad", "m2", "update_synth_memory",
-                R"({"operation":"remember","key":"lead","preference":"bright lead","evidence":"I always like bright leads"})"),
-                completedText("done", "No preference stored") }, memory);
-            rejected.session.start(rejected.request());
-            expect(pumpUntil(rejected.session, terminal));
-            expectEquals(memory->read().text, before);
-            bool sawFailure = false;
-            for (const auto& entry : rejected.session.snapshot().transcript)
-                if (entry.kind == AgentTranscriptKind::toolResult && !entry.success) sawFailure = true;
-            expect(sawFailure);
+            const auto transcript = next.session.snapshot().transcript;
+            expect(transcript.size() >= 4);
+            expect(std::all_of(transcript.begin(), transcript.end(), [](const auto& entry) {
+                return entry.kind != AgentTranscriptKind::toolCall
+                    && entry.kind != AgentTranscriptKind::toolResult;
+            }));
+
+            SessionHarness isolated({ completedText("other", "Done") }, {}, manager, manager);
+            auto other = isolated.request();
+            other.presetId = juce::Uuid().toString().toStdString();
+            other.prompt = "different preset";
+            isolated.session.start(other);
+            expect(pumpUntil(isolated.session, terminal));
+            {
+                std::lock_guard<std::mutex> lock(isolated.model.mutex);
+                std::string combined;
+                for (const auto& message : isolated.model.capturedMessages.front())
+                    combined += message.text;
+                expect(combined.find(u8"温暖柔和") == std::string::npos);
+            }
             expect(directory.deleteRecursively());
         }
 

@@ -1,7 +1,8 @@
 #include "AgentSession.h"
 
 #include "AgentPrompt.h"
-#include "../memory/SynthMemory.h"
+#include "../memory/SensitiveDataFilter.h"
+#include "../context/ContextManager.h"
 #include "../AgentLimits.h"
 #include "../JsonAccess.h"
 #include "../model/IModelClient.h"
@@ -21,6 +22,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace agentic_dexed::agent::session
@@ -32,7 +34,7 @@ constexpr std::size_t maxStreamingTextBytes = 48u * 1024u;
 constexpr std::size_t maxTranscriptBytes = 128u * 1024u;
 constexpr std::size_t maxTranscriptEntries = 128;
 constexpr std::size_t maxSingleToolOutputBytes = 128u * 1024u;
-constexpr std::size_t maxContextBytes = limits::maxRequestBytes - (24u * 1024u);
+constexpr std::size_t maxContextBytes = limits::maxRequestBytes;
 constexpr std::size_t maxTransactionSummaries = 32;
 
 bool isTerminal(AgentSessionState state)
@@ -91,6 +93,18 @@ std::size_t messageSize(const model::ModelMessage& message)
     if (message.toolResult)
         result += message.toolResult->callId.size() + message.toolResult->output.size() + 48;
     return result;
+}
+
+std::string persistentText(std::string_view text, std::string_view credential)
+{
+    auto sanitized = memory::SensitiveDataFilter::sanitizeForContext(text, credential).text;
+    if (sanitized.size() <= context::kMaximumMessageBytes)
+        return sanitized;
+    auto value = juce::String::fromUTF8(sanitized.data(), static_cast<int>(sanitized.size()));
+    while (value.getNumBytesAsUTF8() > static_cast<int>(context::kMaximumMessageBytes)
+           && value.isNotEmpty())
+        value = value.dropLastCharacters(std::max(1, value.length() / 16));
+    return value.toStdString();
 }
 
 struct PendingConfirmation
@@ -190,12 +204,18 @@ public:
         model::IModelClient& modelClient,
         tools::AgentToolDispatcher& toolDispatcher,
         security::ICredentialStore& credentialStore,
-        std::shared_ptr<memory::SynthMemory> memory)
+        std::shared_ptr<memory::SynthMemory>,
+        std::shared_ptr<context::ContextManager> contextManager,
+        std::shared_ptr<context::ITurnSink> turnSink)
         : modelClient_(modelClient), toolDispatcher_(toolDispatcher),
-          credentialStore_(credentialStore), memory_(std::move(memory)), listenerBridge_(std::make_shared<ListenerBridge>()),
+          credentialStore_(credentialStore), contextManager_(std::move(contextManager)),
+          turnSink_(std::move(turnSink)), listenerBridge_(std::make_shared<ListenerBridge>()),
           callbackAlive_(std::make_shared<std::atomic_bool>(true)),
           worker_([this] { workerLoop(); })
     {
+        defaultPresetId_ = juce::Uuid().toString().toStdString();
+        if (turnSink_ == nullptr && contextManager_ != nullptr)
+            turnSink_ = contextManager_;
     }
 
     ~Impl()
@@ -212,8 +232,8 @@ public:
         auto complete = std::make_shared<std::promise<void>>();
         auto future = complete->get_future();
         enqueueInternal([this, complete] {
-            if (pendingConfirmation_)
-                toolDispatcher_.cancelProposal(pendingConfirmation_->transactionId);
+            if (!isTerminal(working_.state) && working_.state != AgentSessionState::idle)
+                cancelOnWorker();
             requestHandle_.reset();
             credential_.clear();
             complete->set_value();
@@ -240,6 +260,24 @@ public:
         }
         enqueue([this, request = std::move(request), cancellation]() mutable {
             startOnWorker(std::move(request), std::move(cancellation));
+        });
+    }
+
+    void loadConversation(context::PresetContextView view)
+    {
+        enqueue([this, view = std::move(view)] {
+            if (!isTerminal(working_.state) && working_.state != AgentSessionState::idle)
+                return;
+            working_.transcript.clear();
+            if (!view.empty())
+                for (const auto& turn : view->recentTurns)
+                    for (const auto& message : turn.messages)
+                        if (message.role == context::ConversationRole::user)
+                            appendTranscript({ AgentTranscriptKind::user, message.text });
+                        else if (message.role == context::ConversationRole::assistant
+                                 && !message.text.empty())
+                            appendTranscript({ AgentTranscriptKind::assistant, message.text });
+            publish();
         });
     }
 
@@ -332,7 +370,7 @@ private:
         std::shared_ptr<CancellationSource> cancellation)
     {
         if (!isTerminal(working_.state) && working_.state != AgentSessionState::idle)
-            cancelActiveResources();
+            cancelOnWorker();
         requestHandle_.reset();
         credential_.clear();
         toolDispatcher_.resetSession();
@@ -344,10 +382,17 @@ private:
         preferences_ = request.preferences;
         cancellation_ = std::move(cancellation);
         messages_.clear();
+        turnMessages_.clear();
+        toolNamesByCallId_.clear();
         pendingCalls_.clear();
         pendingCallIds_.clear();
         pendingConfirmation_.reset();
         working_ = {};
+        terminalEmitted_ = false;
+        presetId_ = request.presetId.empty() ? defaultPresetId_ : request.presetId;
+        turnId_ = juce::Uuid().toString().toStdString();
+        expectedContextVersion_ = 0;
+        credentialId_ = request.credentialId;
 
         if (request.prompt.empty() || request.prompt.size() > maxPromptBytes)
         {
@@ -368,21 +413,31 @@ private:
         }
         credential_ = std::move(loaded.secret);
 
-        userPrompt_ = request.prompt;
+        turnMessages_.push_back({ context::ConversationRole::user, request.prompt });
         auto systemPrompt = createAgentSystemPrompt(preferences_.applyMode, request.prompt);
-        auto modelPrompt = request.prompt;
-        if (memory_)
+        if (contextManager_ != nullptr)
         {
-            systemPrompt += memory::SynthMemory::instructions();
-            const auto saved = memory_->read(juce::String(std::string(credential_.view())));
-            auto* context = new juce::DynamicObject();
-            context->setProperty("synth_memory", saved.ok ? saved.text : juce::String());
-            context->setProperty("memory_available", saved.ok);
-            context->setProperty("current_request", juce::String(request.prompt));
-            modelPrompt = json(juce::var(context));
+            auto built = contextManager_->buildRequestContext(
+                presetId_, request.prompt, std::move(systemPrompt));
+            if (!built.ok)
+            {
+                fail("context_load_failed", built.error);
+                return;
+            }
+            messages_ = std::move(built.messages);
+            if (!built.context.empty())
+                expectedContextVersion_ = built.context->revision;
+            for (const auto& entry : built.history)
+                appendTranscript({
+                    entry.role == context::ConversationRole::user
+                        ? AgentTranscriptKind::user : AgentTranscriptKind::assistant,
+                    entry.text, {}, {}, true });
         }
-        messages_.push_back({ "system", std::move(systemPrompt), {}, {} });
-        messages_.push_back({ "user", std::move(modelPrompt), {}, {} });
+        else
+        {
+            messages_.push_back({ "system", std::move(systemPrompt), {}, {} });
+            messages_.push_back({ "user", request.prompt, {}, {} });
+        }
         appendTranscript({ AgentTranscriptKind::user, request.prompt, {}, {}, true });
         startModelRequest();
     }
@@ -409,10 +464,7 @@ private:
         request.authorization = credential_.view();
         request.messages = messages_;
         if (toolIterations_ < limits::maxToolIterations)
-        {
             request.tools = tools::createAgentToolSchemas();
-            if (memory_) request.tools.add(memory::SynthMemory::toolSchema());
-        }
         request.cancellation = cancellation_->token();
 
         const auto generation = generation_;
@@ -506,6 +558,7 @@ private:
         if (!roundText_.empty())
         {
             appendTranscript({ AgentTranscriptKind::assistant, roundText_, {}, {}, true });
+            turnMessages_.push_back({ context::ConversationRole::assistant, roundText_ });
         }
 
         if (pendingCalls_.empty())
@@ -578,28 +631,8 @@ private:
             tools::ToolResult result;
             try
             {
-                if (memory_ && call.name == "update_synth_memory")
-                {
-                    const auto operation = propertyString(*parsed.value, "operation");
-                    const auto key = propertyString(*parsed.value, "key");
-                    const auto preference = propertyString(*parsed.value, "preference");
-                    const auto evidence = propertyString(*parsed.value, "evidence");
-                    const auto* object = parsed.value->getDynamicObject();
-                    if (!operation || !key || !preference || !evidence || object->getProperties().size() != 4)
-                        result = { call.callId, false, errorObject("invalid_arguments", "Memory requires operation, key, preference and evidence strings"), "invalid_arguments" };
-                    else
-                    {
-                        const auto saved = memory_->update(*operation, *key, *preference, *evidence,
-                            userPrompt_, std::string(credential_.view()));
-                        auto* output = new juce::DynamicObject();
-                        output->setProperty("success", saved.ok);
-                        output->setProperty("message", saved.ok ? juce::String("Local synth preferences updated") : saved.error);
-                        result = { call.callId, saved.ok, juce::var(output), saved.ok ? "" : "memory_error" };
-                    }
-                }
-                else
-                    result = toolDispatcher_.dispatch(
-                        call.name, *parsed.value, call.callId, cancellation_->token());
+                result = toolDispatcher_.dispatch(
+                    call.name, *parsed.value, call.callId, cancellation_->token());
             }
             catch (...)
             {
@@ -691,6 +724,9 @@ private:
     {
         appendTranscript({ AgentTranscriptKind::toolCall, call.arguments,
                            call.callId, call.name, true });
+        toolNamesByCallId_[call.callId] = call.name;
+        turnMessages_.push_back({ context::ConversationRole::toolCall,
+                                  call.arguments, call.callId, call.name, true });
     }
 
     void appendToolResult(tools::ToolResult result)
@@ -707,6 +743,11 @@ private:
         messages_.push_back(std::move(message));
         appendTranscript({ AgentTranscriptKind::toolResult, output,
                            result.callId, {}, result.success });
+        const auto found = toolNamesByCallId_.find(result.callId);
+        turnMessages_.push_back({ context::ConversationRole::toolResult, output,
+                                  result.callId,
+                                  found == toolNamesByCallId_.end() ? std::string() : found->second,
+                                  result.success });
     }
 
     void updateTransaction(
@@ -813,6 +854,36 @@ private:
             && cancellation_->token().isCancellationRequested();
     }
 
+    void emitTerminalTurn(context::TurnTerminalState terminalState)
+    {
+        if (terminalEmitted_)
+            return;
+        terminalEmitted_ = true;
+        if (turnSink_ == nullptr || presetId_.empty() || turnMessages_.empty())
+            return;
+        const auto secret = credential_.view();
+        context::ConversationTurn turn;
+        turn.turnId = turnId_;
+        turn.terminalState = terminalState;
+        turn.messages = turnMessages_;
+        for (auto& message : turn.messages)
+            message.text = persistentText(message.text, secret);
+        for (const auto& transaction : working_.transactions)
+            turn.transactions.push_back({
+                transaction.transactionId,
+                persistentText(transaction.reason, secret),
+                transaction.resultingRevision
+            });
+        context::TerminalTurn terminal;
+        terminal.presetId = presetId_;
+        terminal.expectedVersion = expectedContextVersion_;
+        terminal.turn = std::move(turn);
+        terminal.provider = preferences_.providerConfig();
+        terminal.credentialId = credentialId_;
+        try { turnSink_->onTurnFinished(std::move(terminal)); }
+        catch (...) {}
+    }
+
     void cancelActiveResources()
     {
         if (pendingConfirmation_)
@@ -826,6 +897,7 @@ private:
     {
         if (isTerminal(working_.state))
             return;
+        emitTerminalTurn(context::TurnTerminalState::cancelled);
         cancelActiveResources();
         working_.pendingProposalId.clear();
         working_.errorCode = "cancelled";
@@ -837,7 +909,6 @@ private:
     {
         if (isTerminal(working_.state))
             return;
-        cancelActiveResources();
         if (message.size() > limits::maxProtocolErrorMessageBytes)
             message.resize(limits::maxProtocolErrorMessageBytes);
         working_.pendingProposalId.clear();
@@ -845,12 +916,15 @@ private:
         working_.errorMessage = std::move(message);
         appendTranscript({ AgentTranscriptKind::status,
             working_.errorCode + ": " + working_.errorMessage, {}, {}, false });
+        emitTerminalTurn(context::TurnTerminalState::failed);
+        cancelActiveResources();
         setState(AgentSessionState::failed);
     }
 
     void complete()
     {
         requestHandle_.reset();
+        emitTerminalTurn(context::TurnTerminalState::completed);
         credential_.clear();
         working_.streamingText.clear();
         setState(AgentSessionState::completed);
@@ -859,8 +933,8 @@ private:
     model::IModelClient& modelClient_;
     tools::AgentToolDispatcher& toolDispatcher_;
     security::ICredentialStore& credentialStore_;
-    std::shared_ptr<memory::SynthMemory> memory_;
-    std::string userPrompt_;
+    std::shared_ptr<context::ContextManager> contextManager_;
+    std::shared_ptr<context::ITurnSink> turnSink_;
     std::shared_ptr<ListenerBridge> listenerBridge_;
     std::shared_ptr<std::atomic_bool> callbackAlive_;
 
@@ -886,19 +960,30 @@ private:
     security::SecureSecret credential_;
     std::unique_ptr<http::IRequestHandle> requestHandle_;
     std::vector<model::ModelMessage> messages_;
+    std::vector<context::ConversationMessage> turnMessages_;
+    std::unordered_map<std::string, std::string> toolNamesByCallId_;
     std::vector<model::ModelToolCallReady> pendingCalls_;
     std::set<std::string> pendingCallIds_;
     std::optional<PendingConfirmation> pendingConfirmation_;
     std::string roundText_;
     std::optional<std::string> roundReasoning_;
+    std::string defaultPresetId_;
+    std::string presetId_;
+    std::string turnId_;
+    std::string credentialId_;
+    std::uint64_t expectedContextVersion_ = 0;
+    bool terminalEmitted_ = false;
 };
 
 AgentSession::AgentSession(
     model::IModelClient& modelClient,
     tools::AgentToolDispatcher& toolDispatcher,
     security::ICredentialStore& credentialStore,
-    std::shared_ptr<memory::SynthMemory> memory)
-    : impl_(std::make_unique<Impl>(modelClient, toolDispatcher, credentialStore, std::move(memory)))
+    std::shared_ptr<memory::SynthMemory> memory,
+    std::shared_ptr<context::ContextManager> contextManager,
+    std::shared_ptr<context::ITurnSink> turnSink)
+    : impl_(std::make_unique<Impl>(modelClient, toolDispatcher, credentialStore,
+          std::move(memory), std::move(contextManager), std::move(turnSink)))
 {
 }
 
@@ -907,6 +992,11 @@ AgentSession::~AgentSession() = default;
 void AgentSession::start(UserAgentRequest request)
 {
     impl_->start(std::move(request));
+}
+
+void AgentSession::loadConversation(context::PresetContextView view)
+{
+    impl_->loadConversation(std::move(view));
 }
 
 void AgentSession::confirmProposal(std::string proposalId)

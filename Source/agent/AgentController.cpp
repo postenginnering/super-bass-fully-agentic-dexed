@@ -1,7 +1,7 @@
 #include "AgentController.h"
 
 #include "AgentLimits.h"
-#include "memory/SynthMemory.h"
+#include "context/ContextManager.h"
 #include "model/ChatCompletionsClient.h"
 #include "model/ResponsesClient.h"
 #include "http/JuceHttpTransport.h"
@@ -186,7 +186,9 @@ public:
           persistentCredentials_(validCredentialStore(std::move(credentialStore))),
           credentials_(*persistentCredentials_),
           dispatcher_(registry, stateService, audition_, *this),
-          session_(router_, dispatcher_, credentials_, std::make_shared<memory::SynthMemory>()),
+          contextStore_(std::make_shared<context::ConversationContextStore>()),
+          contextManager_(std::make_shared<context::ContextManager>(contextStore_)),
+          session_(router_, dispatcher_, credentials_, {}, contextManager_, contextManager_),
           connectionWorker_([this] { connectionWorkerLoop(); })
     {
     }
@@ -379,6 +381,8 @@ public:
     security::CredentialSession credentials_;
     audition::AuditionAnalyzer audition_;
     tools::AgentToolDispatcher dispatcher_;
+    std::shared_ptr<context::ConversationContextStore> contextStore_;
+    std::shared_ptr<context::ContextManager> contextManager_;
     session::AgentSession session_;
 
     mutable std::mutex editorMutex_;

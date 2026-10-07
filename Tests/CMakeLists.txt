@@ -27,6 +27,7 @@ target_sources(AgenticDexedTests PRIVATE
     SensitiveDataFilterTests.cpp
     PresetIdentityTests.cpp
     ConversationContextStoreTests.cpp
+    ContextManagerTests.cpp
     AgentToolSchemaTests.cpp
     AgentToolDispatcherTests.cpp
     AuditionAnalyzerTests.cpp
