@@ -165,6 +165,8 @@ target_sources(${BaseTargetName} PRIVATE
 	agent/context/ConversationTypes.h
 	agent/context/ConversationSerialization.cpp
 	agent/context/ConversationSerialization.h
+	agent/context/PresetIdentityService.cpp
+	agent/context/PresetIdentityService.h
 	agent/session/AgentPrompt.h
 	agent/session/AgentSession.cpp
 	agent/session/AgentSession.h
@@ -236,6 +238,7 @@ PRIVATE
     juce::juce_audio_processors
     juce::juce_audio_utils
     juce::juce_core
+	juce::juce_cryptography
     juce::juce_data_structures
     juce::juce_dsp
     juce::juce_events

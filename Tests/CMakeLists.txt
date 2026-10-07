@@ -25,6 +25,7 @@ target_sources(AgenticDexedTests PRIVATE
     SynthMemoryTests.cpp
     ConversationSerializationTests.cpp
     SensitiveDataFilterTests.cpp
+    PresetIdentityTests.cpp
     AgentToolSchemaTests.cpp
     AgentToolDispatcherTests.cpp
     AuditionAnalyzerTests.cpp
@@ -69,6 +70,7 @@ target_compile_definitions(AgenticDexedTests PRIVATE
 target_link_libraries(AgenticDexedTests PRIVATE
     AgenticDexed
     juce::juce_core
+	juce::juce_cryptography
     juce::juce_events
 )
 
