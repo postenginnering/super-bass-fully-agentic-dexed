@@ -115,3 +115,8 @@ add_test(
     NAME agentic-dexed-macos-source-compatibility
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyMacSourceCompatibility.cmake
 )
+
+add_test(
+    NAME agentic-dexed-memory-documentation
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyMemoryDocumentation.cmake
+)

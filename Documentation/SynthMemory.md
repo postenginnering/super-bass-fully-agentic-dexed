@@ -1,72 +1,82 @@
-# Local synth memory
+# 本地音色记忆与每预设上下文
 
-The Agent shares a local `synth.md` between Standalone and VST3 instances for the
-current operating-system user. It reloads the file on every new Agent request.
-The file is created on the first successful preference update, not on startup.
+## 两类记忆
 
-- Windows: `%APPDATA%\Super Bass Fully Agentic Dexed\synth.md`
-- macOS: `~/Library/Application Support/Super Bass Fully Agentic Dexed/synth.md`
+Super Bass Fully Agentic Dexed 将记忆分为两层：
 
-Examples:
+1. **全局音色偏好**写在本机 `synth.md`，Standalone 与 VST3、所有预设共同使用。
+2. **连续对话上下文**按预设 UUID 独立保存。切换、移动或重命名预设时上下文跟随；复制预设时克隆为新的独立上下文；初始化预设时创建空上下文。
 
-- “记住，我平时喜欢温暖柔和的 pad，不喜欢刺耳的高频。”
-- “以后 pad 改成偏明亮的，更新我的偏好。”
-- “这一次做个明亮的 pad，不要改变我的长期偏好。”
-- “忘记我的 pad 偏好。”
-- “清空你记住的所有音色偏好。”
+这样既能让 Agent 了解用户一贯喜欢的声音，又不会把 A 预设的调音过程混入 B 预设。
 
-The model can call `update_synth_memory` with `remember`, `forget`, or `clear`.
-Each action must quote evidence from the current user message. The prompt tells
-the model to retain only explicitly expressed enduring sound preferences, not
-infer preferences from one-off requests or store unrelated personal information.
-This semantic selection is model-driven; exact quotation and file validation
-are enforced by the host. A successful write is acknowledged in natural language.
+## 自动选择性记忆
 
-## Privacy and control
+主回答完成后，后台整理器使用该轮开始时捕获的 provider、模型和凭据引用进行一次无工具请求。它只接受 `add`、`replace`、`remove`、`observe`、`none` 五种严格操作，并要求证据逐字存在于当前用户文本。
 
-Storage is local, but its contents are included in requests to your selected
-model provider so the Agent can use your preferences. No extra summarization API
-request is made. Chat transcripts, API keys, synth snapshots and audio are not
-automatically written to this file. Credential-like content and the current
-provider secret are rejected both when writing and when reading model context.
-This is defense in depth, not a general-purpose sensitive-data classifier: do not
-put secrets in a manually edited file.
+- 明确长期表达，例如“我一般偏好温暖柔和的 pad”，可直接写入。
+- 一次性表达，例如“这次做一个空灵的 pad”，只记录在 `memory-state.json`；同一主题在两个不同轮次重复后才写入 `synth.md`。
+- 长期偏好的否定或冲突表达会替换旧值；删除表达会移除对应主题。
+- 与合成器无关的个人信息、路径、凭据和未知操作不会写入。
+- 取消的轮次会先保存到对应预设上下文，但偏好整理延后；后续正常轮次仍可触发维护。
 
-Edit the UTF-8 Markdown file directly to inspect or adjust it; delete it to forget
-all stored information. Managed entries look like `- [pad_brightness] 温暖柔和`.
-Updates to the same key replace earlier entries. Other handwritten prose is
-preserved; `clear` removes all notes. Exact quotes are validated but are not saved.
+后台整理请求不提供任何合成器工具，因此不能改参数、试听或保存预设。失败、离线、无效 JSON、版本冲突或关闭应用都不会删除已有偏好或对话；关闭时会取消正在进行的维护请求并清空队列。
 
-Current requests take precedence over remembered preferences. Memory is passed
-as data rather than appended to system instructions. Stored preferences cannot
-authorize infinite sustain; the existing current-request requirement remains.
+## 文件位置与清除方法
 
-“回退” still restores the sound before the last user request. It does not undo
-preference writes: ask to forget or correct preferences separately. Successful
-memory writes persist immediately, including if later sound-design steps fail
-or the remaining request is cancelled.
+根目录：
 
-## Reliability
+- Windows：`%APPDATA%\Super Bass Fully Agentic Dexed\`
+- macOS：`~/Library/Application Support/Super Bass Fully Agentic Dexed/`
 
-All I/O runs on the Agent worker, never in the audio callback. A process mutex and
-per-file interprocess lock serialize read-modify-write operations, and a temporary
-file replaces the target only after writing completes. Concurrent instances merge
-different topic keys; the latest committed value wins for a shared key. Reads are
-limited to 8 KiB, individual preferences to 512 UTF-8 bytes. Invalid, oversized,
-credential-containing or unreadable files are omitted from model context, and
-write failures return a tool error without silently claiming success. Correct or
-delete a rejected local file manually.
+主要文件：
 
-This feature branch builds on R6. Tests cover persistence, Chinese text, edits,
-forgetting, clearing, concurrent writers, credential rejection, bounded reads,
-unwritable targets and the model tool loop. Native macOS verification must be run
-on a Mac; Windows results are not a substitute for that check.
+- `synth.md`：可读、可手工编辑的 UTF-8 Markdown，全局偏好上限 8 KiB。
+- `memory-state.json`：尚未晋升的一次性偏好候选和独立轮次证据。
+- `contexts/<UUID>.json.z`：每个预设的 GZIP 上下文。
+- `preset-index.json`：槽位、预设 UUID 和规范化 `.syx` 音色指纹索引。
 
-Verified on Windows, 2026-10-07: Standalone, VST3 and test targets build in Release;
-20,607 unit assertions pass, including 41 storage assertions and the session
-memory integration scenarios. The opt-in real DeepSeek test
-`AgenticDexedTests --filter LiveMemory` passes 13 assertions across remember,
-recall and clear requests. It uses an isolated temporary memory file and requires
-`DEEPSEEK_API_KEY`; ordinary CTest never runs paid model calls. VST3 pluginval at
-strictness 8 passes. The obsolete Intel-Mac workflow assertion inherited from R6
-was corrected to match the published Windows x64 / macOS ARM64 workflow.
+关闭 Standalone 和所有加载 VST3 的 DAW 后：
+
+- 删除 `synth.md` 与 `memory-state.json`，清除全部全局音色偏好。
+- 删除 `contexts/`，清除全部预设聊天记录。
+- 删除 `preset-index.json`，清除本机预设身份和 `.syx` 指纹关联。
+
+手工编辑 `synth.md` 时不要放入凭据、私人路径或个人信息。应用会保留不属于托管条目的普通文字，但文件无效、过大、包含 NUL、非 UTF-8、符号链接或命中敏感信息过滤时会拒绝读取。
+
+## 上下文管理与压缩
+
+每个预设上下文保存自然语言消息、必要的工具配对、事务摘要、内容指纹别名和版本号。以下任一条件会安排后台压缩：
+
+- 最近未压缩轮次超过 12；
+- 序列化内容超过 160 KiB；
+- 组装下一次模型请求时预计超过 224 KiB 管理预算。
+
+压缩结果只替换旧摘要，并完整保留最近 8 轮的结构字段、工具配对和事务记录。写入使用版本检查、临时文件和原子替换；如果用户在压缩期间继续对话，旧压缩版本不能覆盖更新缓存。
+
+主请求始终预留 32 KiB 协议空间。超大单条消息、超过 2 MiB 的上下文和解压炸弹会被拒绝。文件与网络工作不进入音频回调。
+
+## `.dexedpreset` 与 `.syx`
+
+`.dexedpreset` 保存音色时会附带当前预设的脱敏上下文。上下文采用版本化 JSON、GZIP 和 SHA-256 校验，并限制解压后最多 2 MiB。导入时若上下文损坏、哈希错误、超限或包含非法结构，只忽略上下文，音色仍然加载。
+
+`.syx` 保持原始 DX7 格式，不写入偏好或聊天。本机根据规范化 155 字节音色的 SHA-256 指纹找回已有 UUID。相同内容从不同 `.syx` 文件导入会关联已有身份；用户执行“复制预设”时会显式生成新 UUID，随后两份上下文独立演进。
+
+分享 `.dexedpreset` 前应检查内容。已知 API token、Bearer、私钥、带密码 URL、本机路径和 Tailscale 地址会被隐藏，但敏感信息过滤不是通用个人信息识别器，无法保证识别所有未知格式。
+
+## 模型数据流与安全边界
+
+主声音设计请求包含：当前用户请求、全局偏好、当前预设摘要、预算内最近对话和必要工具结果。偏好整理与上下文压缩是主回答后的额外模型请求，使用当轮捕获的 provider 和模型，`tools` 为空。
+
+偏好与历史作为不可信数据传入，不能覆盖当前请求，也不能授权保存、外部操作或无限延音。即使 `synth.md` 或历史写着“以后都无限延音”，当前请求没有明确要求时仍会检查有限释音。
+
+API Key 只从系统凭据存储或当前进程临时凭据读取，使用后清零，不进入 `synth.md`、上下文、预设或诊断文本。
+
+## 验证
+
+普通 CTest 不发起付费网络请求。真实模型测试必须显式运行：
+
+```text
+AgenticDexedTests --filter LiveMemory
+```
+
+测试优先使用 `DEEPSEEK_API_KEY`，否则读取系统中 `agent.model` 的已保存凭据；输出不会打印 Key。2026-10-07 的 Windows 真实 DeepSeek Flash 回归通过 26 项断言，覆盖一次性偏好、明确长期偏好、新预设隔离、上下文压缩、零参数写入和临时数据清理。Apple Silicon 仍须以 Mac 本机报告为准。
