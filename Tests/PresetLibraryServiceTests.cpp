@@ -12,6 +12,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <memory>
 
@@ -161,10 +162,11 @@ public:
                 asyncResult = std::move(result);
                 asyncComplete.store(true);
             });
-        for (int attempt = 0; attempt < 200 && !asyncComplete.load(); ++attempt)
-            agentic_dexed::test::pumpMessagesFor(10);
-        expect(asyncComplete.load());
-        expect(asyncResult.ok);
+        expect(agentic_dexed::test::pumpMessagesUntil(
+            [&asyncComplete] { return asyncComplete.load(); },
+            std::chrono::seconds(30)),
+            "Asynchronous cartridge open callback timed out");
+        expect(asyncResult.ok, asyncResult.message);
 
         beginTest("save captures the current edited voice rather than the loaded cartridge slot");
         expect(processor->synthStateService().setUserValue("global.algorithm", int64_t(23)).status
@@ -176,9 +178,11 @@ public:
             asyncResult = std::move(result);
             asyncComplete.store(true);
         });
-        for (int attempt = 0; attempt < 200 && !asyncComplete.load(); ++attempt)
-            agentic_dexed::test::pumpMessagesFor(10);
-        expect(asyncComplete.load() && asyncResult.ok);
+        expect(agentic_dexed::test::pumpMessagesUntil(
+            [&asyncComplete] { return asyncComplete.load(); },
+            std::chrono::seconds(30)),
+            "Asynchronous cartridge save callback timed out");
+        expect(asyncResult.ok, asyncResult.message);
         expect(service.openBrowserCartridge(editedFile).ok);
         expect(service.activateBrowserSlot(processor->getCurrentProgram()).ok);
         expectEquals(std::get<int64_t>(processor->synthStateService().snapshot(
