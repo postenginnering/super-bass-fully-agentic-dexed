@@ -87,6 +87,8 @@ set_target_properties(AgenticDexedTests PROPERTIES
 add_test(NAME agentic-dexed-unit COMMAND AgenticDexedTests)
 add_test(NAME agentic-dexed-product-identity
     COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyProductIdentity.cmake)
+add_test(NAME agentic-dexed-product-identity-macos
+    COMMAND ${CMAKE_COMMAND} -DAPPLE=TRUE -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyProductIdentity.cmake)
 set_tests_properties(agentic-dexed-unit PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )

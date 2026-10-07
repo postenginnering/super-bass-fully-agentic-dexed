@@ -15,7 +15,34 @@ assert_workflow_contains("tar -czf \"agentic-dexed-macos-\${{ matrix.arch }}.tar
 assert_workflow_contains("path: agentic-dexed-macos-\${{ matrix.arch }}.tar.gz")
 assert_workflow_contains("tar -xzf build-x86/agentic-dexed-macos-x86_64.tar.gz -C build-x86/release-arch")
 assert_workflow_contains("tar -xzf build-arm/agentic-dexed-macos-arm64.tar.gz -C build-arm/release-arch")
+assert_workflow_contains("AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone")
+assert_workflow_contains("Release/AU")
+assert_workflow_contains("bash ./scripts/validate-au.sh")
+assert_workflow_contains("-DPACKAGE_ROOT=./dist/macos")
+assert_workflow_contains("name: agentic-dexed-macos-universal-validation")
+assert_workflow_contains("path: dist/macos/validation/**")
 assert_workflow_contains("-P scripts/SanitizeValidationLogs.cmake")
+
+foreach(script IN ITEMS
+        packaging/macos/package.sh
+        scripts/sign-macos.sh
+        scripts/verify-signatures.sh)
+    file(READ "${REPOSITORY_ROOT}/${script}" script_contents)
+    if(NOT script_contents MATCHES "Super Bass Fully Agentic Dexed\\.component")
+        message(FATAL_ERROR "${script} does not handle the AU component")
+    endif()
+endforeach()
+
+file(READ "${REPOSITORY_ROOT}/packaging/macos/package.sh" package_script)
+if(NOT package_script MATCHES "Library/Audio/Plug-Ins/Components")
+    message(FATAL_ERROR "macOS package does not install the AU component in Components")
+endif()
+
+file(READ "${REPOSITORY_ROOT}/scripts/verify-signatures.sh" verification_script)
+if(NOT verification_script MATCHES "lipo -verify_arch x86_64 arm64.*component"
+   OR NOT verification_script MATCHES "validate-au\\.sh")
+    message(FATAL_ERROR "macOS signature verification does not validate AU architecture and registration")
+endif()
 
 string(FIND "${workflow}" "-P scripts/SanitizeValidationLogs.cmake" sanitize_position)
 string(FIND "${workflow}" "Archive sanitized validation logs" archive_position)

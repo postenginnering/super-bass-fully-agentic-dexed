@@ -1,6 +1,6 @@
 # Super Bass Fully Agentic Dexed
 
-Super Bass Fully Agentic Dexed（SBFAD）是一款开源 FM 合成器，提供 Windows x64 和 Apple Silicon macOS 原生 Standalone / VST3。它基于 Dexed，并加入中文自然语言 Agent：输入“做一个空灵、慢起音、余音较长但不能无限延音的 pad”，Agent 会读取当前音色、修改参数、试听并用自然语言说明结果。
+Super Bass Fully Agentic Dexed（SBFAD）是一款开源 FM 合成器，提供 Windows x64 Standalone / VST3，以及 macOS 原生 Standalone / VST3 / AU。它基于 Dexed，并加入中文自然语言 Agent：输入“做一个空灵、慢起音、余音较长但不能无限延音的 pad”，Agent 会读取当前音色、修改参数、试听并用自然语言说明结果。
 
 界面只保留“发送、回退、保存为预设”三个主要操作。中文输入可直接按回车发送；“回退”恢复到本次用户输入之前的完整音色状态。除非当前请求明确要求，Agent 会检查并避免无限延音。
 
@@ -60,7 +60,7 @@ cmake --build build/windows --config Release --target AgenticDexedTests AgenticD
 ctest --test-dir build/windows -C Release --output-on-failure
 ```
 
-Apple Silicon 构建必须显式设置 `-DCMAKE_OSX_ARCHITECTURES=arm64`。发布前在对应原生机器上运行测试与 pluginval；Windows 构建不能代替 Apple Silicon 验证。GitHub Actions 当前保持停用，验证以本机报告为准。
+Apple Silicon 构建必须显式设置 `-DCMAKE_OSX_ARCHITECTURES=arm64`，并构建 `AgenticDexed_AU`。发布前在对应原生机器上运行 CTest、pluginval 和 `auval`；Windows 构建不能代替 macOS 原生验证。GitHub Actions 平时保持停用，只在明确授权的 Release 构建期间临时启用。
 
 ## 分支与许可
 

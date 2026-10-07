@@ -27,7 +27,7 @@ jobs:
       - name: Build
         run: >-
           cmake --build build --config Release --parallel
-          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_Standalone
+          --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone
 
       - name: Test
         run: >-
@@ -104,6 +104,12 @@ jobs:
           --strictness 8
           --output-dir ./build/validation
 
+      - name: Validate AU
+        run: >-
+          bash ./scripts/validate-au.sh
+          --component-path "./build/Source/AgenticDexed_artefacts/Release/AU/Super Bass Fully Agentic Dexed.component"
+          --output-dir ./build/validation/au
+
       - name: Upload test logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -119,7 +125,7 @@ jobs:
       - name: Archive macOS arm64 artifacts
         run: >-
           tar -czf agentic-dexed-macos-arm64.tar.gz
-          -C build/Source/AgenticDexed_artefacts/Release VST3 Standalone
+          -C build/Source/AgenticDexed_artefacts/Release VST3 AU Standalone
 
       - name: Upload macOS arm64 artifacts
         uses: actions/upload-artifact@v4

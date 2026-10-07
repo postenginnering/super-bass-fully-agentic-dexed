@@ -1,6 +1,6 @@
 # 构建 Super Bass Fully Agentic Dexed
 
-项目生成 Windows x64 与 Apple Silicon 原生的 Standalone 和 VST3。默认不会复制插件到系统目录。
+项目生成 Windows x64 Standalone / VST3，以及 macOS 原生 Standalone / VST3 / AU。默认不会复制插件到系统目录。
 
 ## 准备源码
 
@@ -39,7 +39,7 @@ cmake -S . -B build/macos-arm64 -G Xcode \
   -DAGENTIC_DEXED_BUILD_TESTS=ON \
   -DAGENTIC_DEXED_COPY_PLUGIN_AFTER_BUILD=OFF
 cmake --build build/macos-arm64 --config Release --parallel 2 \
-  --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_Standalone
+  --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone
 ctest --test-dir build/macos-arm64 -C Release --output-on-failure
 ```
 
@@ -48,9 +48,18 @@ ctest --test-dir build/macos-arm64 -C Release --output-on-failure
 ```bash
 file 'Standalone/Super Bass Fully Agentic Dexed.app/Contents/MacOS/Super Bass Fully Agentic Dexed'
 file 'VST3/Super Bass Fully Agentic Dexed.vst3/Contents/MacOS/Super Bass Fully Agentic Dexed'
+file 'AU/Super Bass Fully Agentic Dexed.component/Contents/MacOS/Super Bass Fully Agentic Dexed'
 ```
 
-两者都必须显示 `arm64`。未签名包在隔离属性存在时可能显示“已损坏”；正式分发应完成签名、公证与 stapling，内部测试包则需在明确来源可信后处理隔离属性。
+三个原生二进制都必须显示 `arm64`。AU 还必须通过：
+
+```bash
+bash ./scripts/validate-au.sh \
+  --component-path './build/macos-arm64/Source/AgenticDexed_artefacts/Release/AU/Super Bass Fully Agentic Dexed.component' \
+  --output-dir ./build/macos-arm64/validation/au
+```
+
+脚本会临时安装 AU、运行 `auval -v aumu AgDx Agnt`，然后恢复原有同名组件。未签名包在隔离属性存在时可能显示“已损坏”；正式分发应完成签名、公证与 stapling，内部测试包则需在明确来源可信后处理隔离属性。
 
 ## 本机验证
 
@@ -76,6 +85,6 @@ macOS 发布包中的 `Run-Full-Regression.command` 会依次运行本机回归�
 
 ## 安装与 CI 状态
 
-将 `AGENTIC_DEXED_COPY_PLUGIN_AFTER_BUILD` 设为 `ON` 可在构建后复制 VST3 到当前用户插件目录；默认 `OFF`。
+将 `AGENTIC_DEXED_COPY_PLUGIN_AFTER_BUILD` 设为 `ON` 可在构建后复制 VST3/AU 到当前用户插件目录；默认 `OFF`。
 
-仓库保留 `.github/workflows` 作为可审查的构建定义，但 GitHub Actions 当前保持停用。验证和发布以 Windows 与 Apple Silicon 原生机器生成的本地报告、校验值和敏感信息审计为准。
+仓库保留 `.github/workflows` 作为可审查的构建定义。GitHub Actions 平时保持停用，只在明确授权的 Release 构建期间临时启用；发布完成后再次关闭。

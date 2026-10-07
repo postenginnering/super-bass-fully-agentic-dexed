@@ -45,10 +45,15 @@ done
 
 entitlements="${repo_root}/packaging/macos/entitlements.plist"
 vst3="${stage}/VST3/Super Bass Fully Agentic Dexed.vst3"
+au="${stage}/AU/Super Bass Fully Agentic Dexed.component"
 codesign --force --timestamp --options runtime --entitlements "${entitlements}" \
     --sign "${MACOS_APPLICATION_IDENTITY}" "${vst3}/Contents/MacOS/Super Bass Fully Agentic Dexed"
 codesign --force --timestamp --options runtime --entitlements "${entitlements}" \
     --sign "${MACOS_APPLICATION_IDENTITY}" "${vst3}"
+codesign --force --timestamp --options runtime --entitlements "${entitlements}" \
+    --sign "${MACOS_APPLICATION_IDENTITY}" "${au}/Contents/MacOS/Super Bass Fully Agentic Dexed"
+codesign --force --timestamp --options runtime --entitlements "${entitlements}" \
+    --sign "${MACOS_APPLICATION_IDENTITY}" "${au}"
 
 app="${stage}/Standalone/Super Bass Fully Agentic Dexed.app"
 if [[ -d "${app}" ]]; then
@@ -64,6 +69,7 @@ rm -f "${portable}"
 ditto -c -k --keepParent "${stage}" "${portable}"
 xcrun notarytool submit "${portable}" --keychain-profile "${MACOS_NOTARY_PROFILE}" --wait
 xcrun stapler staple "${vst3}"
+xcrun stapler staple "${au}"
 if [[ -d "${app}" ]]; then xcrun stapler staple "${app}"; fi
 rm -f "${portable}"
 ditto -c -k --keepParent "${stage}" "${portable}"
@@ -72,7 +78,9 @@ pkgroot="${output_root}/.signed-pkgroot"
 case "${pkgroot}" in "${output_root}"/*) ;; *) echo "Unsafe package root" >&2; exit 2 ;; esac
 rm -rf "${pkgroot}"
 mkdir -p "${pkgroot}/Library/Audio/Plug-Ins/VST3"
+mkdir -p "${pkgroot}/Library/Audio/Plug-Ins/Components"
 ditto "${vst3}" "${pkgroot}/Library/Audio/Plug-Ins/VST3/Super Bass Fully Agentic Dexed.vst3"
+ditto "${au}" "${pkgroot}/Library/Audio/Plug-Ins/Components/Super Bass Fully Agentic Dexed.component"
 if [[ -d "${app}" ]]; then
     mkdir -p "${pkgroot}/Applications"
     ditto "${app}" "${pkgroot}/Applications/Super Bass Fully Agentic Dexed.app"
@@ -88,4 +96,3 @@ rm -rf "${pkgroot}"
 xcrun notarytool submit "${package}" --keychain-profile "${MACOS_NOTARY_PROFILE}" --wait
 xcrun stapler staple "${package}"
 echo "Signed, notarized, and stapled macOS release artifacts"
-

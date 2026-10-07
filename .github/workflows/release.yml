@@ -91,14 +91,17 @@ jobs:
           -DAGENTIC_DEXED_COPY_PLUGIN_AFTER_BUILD=OFF
       - name: Build and test
         run: |
-          cmake --build build --config Release --parallel --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_Standalone
+          cmake --build build --config Release --parallel --target AgenticDexedTests AgenticDexed_VST3 AgenticDexed_AU AgenticDexed_Standalone
           ctest --test-dir build -C Release --output-on-failure --output-junit build/ctest-results.xml
       - name: Validate VST3 at release strictness
         run: bash ./scripts/validate-plugin.sh --plugin-path "./build/Source/AgenticDexed_artefacts/Release/VST3/Super Bass Fully Agentic Dexed.vst3" --strictness 8 --output-dir ./build/validation
+      - name: Validate AU
+        run: bash ./scripts/validate-au.sh --component-path "./build/Source/AgenticDexed_artefacts/Release/AU/Super Bass Fully Agentic Dexed.component" --output-dir ./build/validation/au
       - name: Stage architecture output
         run: |
           mkdir -p release-arch/Source/AgenticDexed_artefacts/Release
           ditto "build/Source/AgenticDexed_artefacts/Release/VST3" "release-arch/Source/AgenticDexed_artefacts/Release/VST3"
+          ditto "build/Source/AgenticDexed_artefacts/Release/AU" "release-arch/Source/AgenticDexed_artefacts/Release/AU"
           ditto "build/Source/AgenticDexed_artefacts/Release/Standalone" "release-arch/Source/AgenticDexed_artefacts/Release/Standalone"
           tar -czf "agentic-dexed-macos-${{ matrix.arch }}.tar.gz" -C release-arch .
       - uses: actions/upload-artifact@v4
@@ -136,6 +139,8 @@ jobs:
           tar -xzf build-arm/agentic-dexed-macos-arm64.tar.gz -C build-arm/release-arch
       - name: Package Universal stage
         run: bash ./scripts/package-macos.sh --x86-build ./build-x86/release-arch --arm-build ./build-arm/release-arch --output-root ./dist/macos --unsigned
+      - name: Verify Universal package layout
+        run: cmake -DPACKAGE_ROOT=./dist/macos -P Tests/cmake/VerifyPackageLayout.cmake
       - name: Import signing credentials
         env:
           APP_CERT_B64: ${{ secrets.MACOS_APPLICATION_CERTIFICATE_B64 }}
@@ -169,6 +174,11 @@ jobs:
         run: bash ./scripts/sign-macos.sh --stage-root ./dist/macos/Super-Bass-Fully-Agentic-Dexed-1.0.1-macos-universal --output-root ./dist/macos
       - name: Verify macOS signatures
         run: bash ./scripts/verify-signatures.sh ./dist/macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentic-dexed-macos-universal-validation
+          if-no-files-found: error
+          path: dist/macos/validation/**
       - uses: actions/upload-artifact@v4
         with:
           name: agentic-dexed-macos-universal-release
@@ -228,4 +238,6 @@ jobs:
           dist/release/release-manifest.json
           dist/release/release-scan-report.json
           --verify-tag
+          --prerelease
+          --title "Super Bass Fully Agentic Dexed 1.0.1 R7"
           --generate-notes

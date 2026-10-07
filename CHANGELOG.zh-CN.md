@@ -1,5 +1,24 @@
 # 中文更新日志
 
+## 2026-10-07 — 1.0.1 R7 Audio Unit
+
+### 新增
+
+- macOS 原生构建新增 AUv2 合成器目标 `AgenticDexed_AU`。
+- Universal 发布包新增 `Super Bass Fully Agentic Dexed.component`，PKG 安装到 `/Library/Audio/Plug-Ins/Components`。
+- 新增 `auval -v aumu AgDx Agnt` 自动验证，并保留架构检查、签名、公证与 stapling。
+
+### 兼容性
+
+- Windows 继续只构建 Standalone 与 VST3，不引入无效 AU 目标。
+- macOS AU、VST3 与 Standalone 共享同一音频引擎、Agent、自动记忆和每预设上下文。
+
+### 验证
+
+- Windows Release 构建通过，确认平台条件不会生成 AU；CTest 9/9 通过，共 21,554 项断言、0 失败。
+- Windows VST3 再次通过 pluginval strictness 8。
+- macOS Release 流程要求每个架构运行 CTest、pluginval 与 `auval`，Universal 包还需通过签名、公证、stapling、双架构和再次 `auval` 验证。
+
 ## 2026-10-07 — 自动记忆与每预设连续上下文
 
 ### 新增
@@ -29,7 +48,7 @@
 
 ### 验证
 
-- Windows Release 全量 CTest：8/8 通过，共 21,554 项断言、0 失败，记录耗时 187.83 秒。
+- Windows Release 全量 CTest：9/9 通过，共 21,554 项断言、0 失败，记录耗时 201.52 秒。
 - Windows VST3 通过 pluginval strictness 8，覆盖 44.1/48/96 kHz 与 1/32/64/512/1024 采样块。
 - 自动偏好整理、压缩、无效响应保留、取消与关闭路径均有独立回归测试。
 - 真实 DeepSeek Flash `LiveMemory`：26 项断言通过，记录耗时 16.145 秒；临时数据已清理，合成器参数写入次数为 0。

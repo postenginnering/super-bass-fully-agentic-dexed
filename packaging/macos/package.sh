@@ -33,8 +33,11 @@ x86_artifacts="${x86_build}/Source/AgenticDexed_artefacts/Release"
 arm_artifacts="${arm_build}/Source/AgenticDexed_artefacts/Release"
 x86_vst3="${x86_artifacts}/VST3/Super Bass Fully Agentic Dexed.vst3"
 arm_vst3="${arm_artifacts}/VST3/Super Bass Fully Agentic Dexed.vst3"
-if [[ ! -d "${x86_vst3}" || ! -d "${arm_vst3}" ]]; then
-    echo "Both architecture-specific VST3 bundles are required" >&2
+x86_au="${x86_artifacts}/AU/Super Bass Fully Agentic Dexed.component"
+arm_au="${arm_artifacts}/AU/Super Bass Fully Agentic Dexed.component"
+if [[ ! -d "${x86_vst3}" || ! -d "${arm_vst3}" ||
+      ! -d "${x86_au}" || ! -d "${arm_au}" ]]; then
+    echo "Both architecture-specific VST3 and AU bundles are required" >&2
     exit 2
 fi
 
@@ -49,6 +52,13 @@ lipo -create \
     "${x86_vst3}/Contents/MacOS/Super Bass Fully Agentic Dexed" \
     "${arm_vst3}/Contents/MacOS/Super Bass Fully Agentic Dexed" \
     -output "${stage}/VST3/Super Bass Fully Agentic Dexed.vst3/Contents/MacOS/Super Bass Fully Agentic Dexed"
+
+mkdir -p "${stage}/AU"
+ditto "${arm_au}" "${stage}/AU/Super Bass Fully Agentic Dexed.component"
+lipo -create \
+    "${x86_au}/Contents/MacOS/Super Bass Fully Agentic Dexed" \
+    "${arm_au}/Contents/MacOS/Super Bass Fully Agentic Dexed" \
+    -output "${stage}/AU/Super Bass Fully Agentic Dexed.component/Contents/MacOS/Super Bass Fully Agentic Dexed"
 
 if [[ ${include_standalone} -eq 1 ]]; then
     x86_app="${x86_artifacts}/Standalone/Super Bass Fully Agentic Dexed.app"
@@ -79,6 +89,7 @@ cmake \
 
 {
     lipo -info "${stage}/VST3/Super Bass Fully Agentic Dexed.vst3/Contents/MacOS/Super Bass Fully Agentic Dexed"
+    lipo -info "${stage}/AU/Super Bass Fully Agentic Dexed.component/Contents/MacOS/Super Bass Fully Agentic Dexed"
     if [[ -d "${stage}/Standalone/Super Bass Fully Agentic Dexed.app" ]]; then
         lipo -info "${stage}/Standalone/Super Bass Fully Agentic Dexed.app/Contents/MacOS/Super Bass Fully Agentic Dexed"
     fi
@@ -93,8 +104,11 @@ ditto -c -k --keepParent "${stage}" "${portable}"
 pkgroot="${output_root}/.pkgroot"
 rm -rf "${pkgroot}"
 mkdir -p "${pkgroot}/Library/Audio/Plug-Ins/VST3"
+mkdir -p "${pkgroot}/Library/Audio/Plug-Ins/Components"
 ditto "${stage}/VST3/Super Bass Fully Agentic Dexed.vst3" \
       "${pkgroot}/Library/Audio/Plug-Ins/VST3/Super Bass Fully Agentic Dexed.vst3"
+ditto "${stage}/AU/Super Bass Fully Agentic Dexed.component" \
+      "${pkgroot}/Library/Audio/Plug-Ins/Components/Super Bass Fully Agentic Dexed.component"
 if [[ -d "${stage}/Standalone/Super Bass Fully Agentic Dexed.app" ]]; then
     mkdir -p "${pkgroot}/Applications"
     ditto "${stage}/Standalone/Super Bass Fully Agentic Dexed.app" \
@@ -106,4 +120,3 @@ pkgbuild --root "${pkgroot}" \
     "${output_root}/${stage_name}.pkg"
 rm -rf "${pkgroot}"
 printf '%s\n' "Created ${portable}" "Created ${output_root}/${stage_name}.pkg"
-
