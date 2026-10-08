@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "security/CredentialStore.h"
 #include "ui/AgentSettingsPanel.h"
+#include "ui/WorkbenchTheme.h"
 
 namespace
 {
@@ -24,6 +25,18 @@ public:
         MemoryCredentialStore credentials;
         AgentSettingsPanel panel(
             processor.agentController(), preferences, credentials);
+
+        beginTest("provider fields use dark readable text on the paper background");
+        for (auto* editor : { &panel.baseUrlEditor(), &panel.modelEditor() })
+        {
+            expect(editor->findColour(juce::TextEditor::textColourId)
+                   == WorkbenchTheme::ink);
+            expect(editor->findColour(juce::TextEditor::backgroundColourId)
+                   == WorkbenchTheme::paper);
+            expect(WorkbenchTheme::contrastRatio(
+                       editor->findColour(juce::TextEditor::textColourId),
+                       editor->findColour(juce::TextEditor::backgroundColourId)) >= 7.0);
+        }
 
         beginTest("stored secrets become a fixed mask and cannot be copied back");
         const juce::String literal = "sk-panel-secret-DO-NOT-LEAK";

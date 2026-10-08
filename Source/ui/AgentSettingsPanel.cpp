@@ -36,6 +36,20 @@ AgentSettingsPanel::AgentSettingsPanel(
     model_.setName("Model");
     model_.setTitle("Provider model identifier");
     model_.setText(juce::String::fromUTF8(preferences_.model.c_str()), false);
+    for (auto* editor : { &baseUrl_, &model_ })
+    {
+        editor->setColour(juce::TextEditor::textColourId, WorkbenchTheme::ink);
+        editor->setColour(juce::TextEditor::backgroundColourId, WorkbenchTheme::paper);
+        editor->setColour(juce::TextEditor::outlineColourId, WorkbenchTheme::inkSoft);
+        editor->setColour(juce::TextEditor::focusedOutlineColourId,
+                          WorkbenchTheme::accentBlue);
+        editor->setColour(juce::TextEditor::highlightColourId,
+                          WorkbenchTheme::focusBlue);
+        editor->setColour(juce::TextEditor::highlightedTextColourId,
+                          WorkbenchTheme::ink);
+        editor->setColour(juce::CaretComponent::caretColourId,
+                          WorkbenchTheme::ink);
+    }
 
     applyMode_.addItem("Apply live", 1);
     applyMode_.addItem("Ask before applying", 2);
